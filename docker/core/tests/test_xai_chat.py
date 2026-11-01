@@ -76,7 +76,9 @@ def _ok() -> httpx.Response:
     )
 
 
-async def test_a_stream_yields_visible_text_and_records_the_price(isolated, monkeypatch, caplog):
+async def test_a_stream_yields_visible_text_and_records_the_price(
+    isolated, monkeypatch, caplog
+):
     calls = _install(monkeypatch, [_ok()])
     caplog.set_level("INFO")
     pieces = [piece async for piece in iter_text("persona", "hello")]
@@ -166,7 +168,48 @@ def test_later_turns_keep_history_as_a_message_prefix():
     assert "prompt_cache_key" not in json.dumps(second)
 
 
-async def test_a_conversation_header_and_api_ticks_set_the_charge(isolated, monkeypatch):
+async def test_the_stable_persona_is_not_replaced_by_turn_text(
+    isolated, monkeypatch, caplog
+):
+    from app.personality.system_prompt import PromptText
+
+    seen = {}
+
+    async def api(
+        system, prompt, *, timeout=120.0, conversation_id=None, volatile="", turns=None
+    ):
+        seen["system"] = system
+        seen["volatile"] = volatile
+        if False:
+            yield ""
+        yield "Hi"
+
+    monkeypatch.setattr("app.xai_chat.iter_text", api)
+    secret = "PRIVATE TURN TEXT"
+    prompt = PromptText(f"NOT THE PREFIX\n\n{secret}", "STATIC PERSONA")
+    caplog.set_level("INFO", logger="app.llm_completions")
+    pieces = [
+        piece
+        async for piece in LLMCompletionsMixin._stream_grok(
+            object(),
+            prompt,
+            [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "Ready."},
+            ],
+        )
+    ]
+    assert pieces == ["Hi"]
+    assert seen["system"] == "STATIC PERSONA"
+    assert secret in seen["volatile"]
+    assert secret not in caplog.text
+    assert "chat cache sha system=" in caplog.text
+    assert "history=" in caplog.text
+
+
+async def test_a_conversation_header_and_api_ticks_set_the_charge(
+    isolated, monkeypatch
+):
     body = _sse(
         {"choices": [{"delta": {"content": "Hi"}}]},
         {"choices": [{"delta": {"content": " there"}}]},
@@ -179,7 +222,9 @@ async def test_a_conversation_header_and_api_ticks_set_the_charge(isolated, monk
             },
         },
     )
-    calls = _install(monkeypatch, [httpx.Response(200, text=body), httpx.Response(200, text=body)])
+    calls = _install(
+        monkeypatch, [httpx.Response(200, text=body), httpx.Response(200, text=body)]
+    )
     conv = "11111111-1111-4111-8111-111111111111"
     pieces = [
         piece
@@ -191,8 +236,7 @@ async def test_a_conversation_header_and_api_ticks_set_the_charge(isolated, monk
 
     assert xai_spend.spent_today() == pytest.approx(0.5)
     pieces = [
-        piece
-        async for piece in iter_text("persona", "hello", conversation_id="conv-7")
+        piece async for piece in iter_text("persona", "hello", conversation_id="conv-7")
     ]
     assert pieces == ["Hi", " there"]
     assert "x-grok-conv-id" not in calls[1].headers
@@ -259,10 +303,14 @@ async def test_malformed_json_is_an_error(isolated, monkeypatch):
             pass
 
 
-async def test_router_uses_the_api_and_falls_back_only_before_text(isolated, monkeypatch):
+async def test_router_uses_the_api_and_falls_back_only_before_text(
+    isolated, monkeypatch
+):
     seen = {"cli": 0}
 
-    async def api_ok(system, prompt, *, timeout=120.0, conversation_id=None, volatile="", turns=None):
+    async def api_ok(
+        system, prompt, *, timeout=120.0, conversation_id=None, volatile="", turns=None
+    ):
         assert system == "persona"
         yield "Hi"
 
@@ -281,7 +329,9 @@ async def test_router_uses_the_api_and_falls_back_only_before_text(isolated, mon
     ] == ["Hi"]
     assert seen["cli"] == 0
 
-    async def api_down(system, prompt, *, timeout=120.0, conversation_id=None, volatile="", turns=None):
+    async def api_down(
+        system, prompt, *, timeout=120.0, conversation_id=None, volatile="", turns=None
+    ):
         raise XaiChatError("boom")
         yield "no"  # pragma: no cover
 
@@ -294,7 +344,9 @@ async def test_router_uses_the_api_and_falls_back_only_before_text(isolated, mon
     ] == ["from cli"]
     assert seen["cli"] == 1
 
-    async def api_partial(system, prompt, *, timeout=120.0, conversation_id=None, volatile="", turns=None):
+    async def api_partial(
+        system, prompt, *, timeout=120.0, conversation_id=None, volatile="", turns=None
+    ):
         yield "Hi"
         raise XaiChatError("cut")
 
@@ -387,7 +439,9 @@ async def test_an_empty_200_and_a_transport_error(isolated, monkeypatch):
     def boom(_request):
         raise httpx.ConnectError("unit-test-key")
 
-    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_kwargs: httpx.MockTransport(boom))
+    monkeypatch.setattr(
+        httpx, "AsyncHTTPTransport", lambda **_kwargs: httpx.MockTransport(boom)
+    )
     with pytest.raises(XaiChatError, match="unavailable") as caught:
         async for _piece in iter_text("persona", "hello"):
             pass
@@ -454,7 +508,9 @@ def _story(text="Kept.", usage=None):
     return httpx.Response(200, json=body)
 
 
-async def test_a_story_stays_on_grok_4_7_and_records_ticks(isolated, monkeypatch, caplog):
+async def test_a_story_stays_on_grok_4_7_and_records_ticks(
+    isolated, monkeypatch, caplog
+):
     monkeypatch.setenv("KLUKAI_CHAT_MODEL", "grok-4.20-0309-non-reasoning")
     calls = _install(
         monkeypatch,
@@ -492,7 +548,9 @@ async def test_the_chat_model_env_selects_a_documented_slug(isolated, monkeypatc
     assert json.loads(calls[0].content)["model"] == "grok-4.3"
 
 
-async def test_an_unknown_chat_model_stays_on_the_default(isolated, monkeypatch, caplog):
+async def test_an_unknown_chat_model_stays_on_the_default(
+    isolated, monkeypatch, caplog
+):
     monkeypatch.setenv("KLUKAI_CHAT_MODEL", "not-a-chat-model")
     calls = _install(monkeypatch, [_ok()])
     caplog.set_level("WARNING")
@@ -548,7 +606,11 @@ async def test_a_blank_story_is_still_charged(isolated, monkeypatch):
         [
             _story(
                 "   ",
-                {"prompt_tokens": 10, "completion_tokens": 1, "cost_in_usd_ticks": 10_000_000_000},
+                {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 1,
+                    "cost_in_usd_ticks": 10_000_000_000,
+                },
             )
         ],
     )
@@ -579,7 +641,9 @@ async def test_a_story_transport_error_hides_the_key(isolated, monkeypatch):
     def boom(_request):
         raise httpx.ConnectError("unit-test-key")
 
-    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_kwargs: httpx.MockTransport(boom))
+    monkeypatch.setattr(
+        httpx, "AsyncHTTPTransport", lambda **_kwargs: httpx.MockTransport(boom)
+    )
     with pytest.raises(XaiChatError, match="unavailable") as caught:
         await complete_text("s", "p")
     assert "unit-test-key" not in str(caught.value)

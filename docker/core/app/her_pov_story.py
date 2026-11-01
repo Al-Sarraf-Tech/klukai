@@ -179,7 +179,9 @@ async def compose_pov(
         import json
 
         content = await complete_creative_text(
-            "Return only the requested memory JSON.", prompt
+            "Return only the requested memory JSON.",
+            prompt,
+            caller="her_pov",
         )
         try:
             raw = json.loads(content)

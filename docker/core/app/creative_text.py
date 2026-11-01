@@ -29,7 +29,9 @@ def uses_cloud_text() -> bool:
     return provider == "anthropic"
 
 
-async def complete_creative_text(system: str, user: str, max_tokens: int = 1024) -> str:
+async def complete_creative_text(
+    system: str, user: str, max_tokens: int = 1024, *, caller: str = "creative_text"
+) -> str:
     """One creative attempt, subject to both creative and shared Haiku caps."""
     if not uses_cloud_text():
         raise CreativeTextError("Cloud creative text is disabled")
@@ -52,7 +54,7 @@ async def complete_creative_text(system: str, user: str, max_tokens: int = 1024)
     # its own attempt. Either refusal prevents HTTP; failures never refund caps.
     await reserve_attempt("text")
     result = await background_llm.text(
-        "creative_text", user, system=system, max_tokens=max_tokens
+        caller, user, system=system, max_tokens=max_tokens
     )
     if not result:
         raise CreativeTextError("Creative text request failed")

@@ -65,7 +65,7 @@ def test_invalid_rates_and_cap_fall_back_to_the_defaults(ledger, monkeypatch):
     assert spend.image_usd() == 0.09
     assert spend.ticks_usd(37756000) == pytest.approx(0.0037756)
     assert spend.ticks_usd(True) is None
-    assert spend.daily_cap() == 3.0
+    assert spend.daily_cap() == 5.0
     monkeypatch.setenv("KLUKAI_API_DAILY_USD_CAP", "1.5")
     assert spend.daily_cap() == 1.5
 
@@ -96,9 +96,9 @@ def test_redact_without_a_key_still_hides_key_shaped_tokens(ledger):
     assert token not in spend.redact(f"saw {token}")
 
 
-def test_a_cap_that_is_not_a_number_stays_at_three_dollars(ledger, monkeypatch):
+def test_a_cap_that_is_not_a_number_stays_at_five_dollars(ledger, monkeypatch):
     monkeypatch.setenv("KLUKAI_API_DAILY_USD_CAP", "nope")
-    assert spend.daily_cap() == 3.0
+    assert spend.daily_cap() == 5.0
 
 
 def test_the_default_ledger_lives_under_the_home_share(ledger, monkeypatch):

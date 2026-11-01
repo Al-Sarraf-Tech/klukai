@@ -136,12 +136,12 @@ def ticks_usd(ticks: object) -> float | None:
 
 
 def daily_cap() -> float:
-    raw = os.environ.get("KLUKAI_API_DAILY_USD_CAP", "3").strip()
+    raw = os.environ.get("KLUKAI_API_DAILY_USD_CAP", "5").strip()
     try:
         value = float(raw)
     except ValueError:
-        return 3.0
-    return value if value >= 0 else 3.0
+        return 5.0
+    return value if value >= 0 else 5.0
 
 
 def ledger_path() -> Path:

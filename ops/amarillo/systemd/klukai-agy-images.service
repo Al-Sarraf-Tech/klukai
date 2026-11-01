@@ -18,7 +18,7 @@ Environment=KLUKAI_GROK_CHAT_EFFORT=low
 Environment=KLUKAI_GROK_BACKGROUND_EFFORT=low
 Environment=KLUKAI_GROK_IMAGE_EFFORT=xhigh
 Environment=KLUKAI_IMAGE_BACKEND=api
-Environment=KLUKAI_API_DAILY_USD_CAP=3
+Environment=KLUKAI_API_DAILY_USD_CAP=5
 Environment=KLUKAI_XAI_LEDGER=%h/.local/share/klukai/xai-ledger/xai-spend.sqlite3
 EnvironmentFile=%h/.config/klukai/agy-images.env
 # Optional prepaid key. A missing file does not stop the unit; pictures stay on the CLI.

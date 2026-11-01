@@ -18,7 +18,7 @@ that call fails. Background memory (recall, extraction, promises, mood) stays
 on the CLI with `disable_api_key_auth=true`. `KLUKAI_CHAT_BACKEND` and
 `KLUKAI_IMAGE_BACKEND` are `api` or `cli`. The default is `api` when the key
 is present. A missing key, the daily USD cap (`KLUKAI_API_DAILY_USD_CAP`,
-default 3; chat uses `usage.cost_in_usd_ticks` / 10^10, each 2k edit is about
+default 5; chat uses `usage.cost_in_usd_ticks` / 10^10, each 2k edit is about
 $0.09, a vision check about $0.007), or an API failure before any chat token
 falls back to the CLI. Fal stays off. Chat sends a stable `x-grok-conv-id`.
 Fish voice is unchanged.

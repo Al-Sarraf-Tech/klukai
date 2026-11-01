@@ -55,7 +55,7 @@ services:
       # The account-login CLI is the fallback. The key file is not copied into
       # the image. Pictures use the same key in the host worker.
       KLUKAI_CHAT_BACKEND: "${KLUKAI_CHAT_BACKEND:-api}"
-      KLUKAI_API_DAILY_USD_CAP: "${KLUKAI_API_DAILY_USD_CAP:-3}"
+      KLUKAI_API_DAILY_USD_CAP: "${KLUKAI_API_DAILY_USD_CAP:-5}"
       KLUKAI_XAI_LEDGER: "/var/klukai/xai/xai-spend.sqlite3"
       # These Claude variables are not the chat path and do not open a client.
       KLUKAI_CLAUDE_PRIMARY: "${KLUKAI_CLAUDE_PRIMARY:-false}"

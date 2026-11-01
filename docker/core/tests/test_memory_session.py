@@ -135,8 +135,11 @@ class TestSaveSession:
 
         await m.save_session("conv-1", state)
 
-        # state mutated in place — old turns trimmed
-        assert len(state.turns) == MAX_SESSION_TURNS
+        # Past the limit, a whole chunk drops. The prefix does not slide by one.
+        from app.conversation_continuity import HISTORY_CHUNK
+
+        assert len(state.turns) == MAX_SESSION_TURNS + 10 - HISTORY_CHUNK
+        assert state.turns[0]["content"] == f"t{HISTORY_CHUNK}"
 
     @pytest.mark.asyncio
     async def test_updates_last_activity(self):

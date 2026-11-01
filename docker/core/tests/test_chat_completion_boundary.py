@@ -101,7 +101,9 @@ async def test_cancelled_done_keeps_completed_reply_history_and_live_context(
                 {"role": "user", "content": "Current question"},
                 {"role": "assistant", "content": "Complete answer."},
             ]
-            assert current.turns == expected[-16:]
+            from app.conversation_continuity import cached_history
+
+            assert current.turns == cached_history(expected)
             assert current.turn_count == len(previous) + 2
             assert current.revision == 1
             assert not storage._session_locks

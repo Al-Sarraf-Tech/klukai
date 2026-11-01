@@ -357,8 +357,11 @@ async def _handle_message(
                     "content": f"[Earlier conversation summary: {session.context_summary}]",
                 }
             )
+        from .conversation_continuity import cached_history
+
         live = [
-            {"role": t["role"], "content": t["content"]} for t in session.turns[-16:]
+            {"role": t["role"], "content": t["content"]}
+            for t in cached_history(session.turns)
         ]
         earlier = []
         if not any((t.get("content") or "").strip() for t in live[:-1]):

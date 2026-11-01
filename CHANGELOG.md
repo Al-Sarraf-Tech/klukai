@@ -23,8 +23,18 @@ in `docs/superpowers/plans/`.
   the next request.
 - The cache probe sends a UUID `x-grok-conv-id`. xAI routes a prompt cache
   only for a UUID.
+- The shared daily API cap is `$5` (`KLUKAI_API_DAILY_USD_CAP`), for chat
+  and pictures together.
+- The chat persona is sent unchanged. Per-turn blocks are appended after it.
+  The history window drops turns in chunks of 8, so the cached prefix stays
+  put between those drops. Each turn logs sha256 prefixes of the persona and
+  the history, not the text.
+- Her POV's capped creative path uses the same `her_pov` API route as the
+  ordinary story call, then the CLI.
+- Recalled exchanges and memories that repeat one of her last 20 replies,
+  across conversations, are left out.
 - Her POV story text and episode summaries try the xAI API first
-  (`grok-4.7`, low effort, the shared `$3` daily cap). An API failure or a
+  (`grok-4.7`, low effort, the shared `$5` daily cap). An API failure or a
   reached cap uses the Grok CLI. Extraction, promises, compaction, and the
   memory pick stay on the CLI.
 - Chat's model is `KLUKAI_CHAT_MODEL`, default `grok-4.7`. Only text slugs
@@ -62,7 +72,7 @@ in `docs/superpowers/plans/`.
   `2:3`, resolution `2k`. The checker is grok-4.7 vision at low effort. The
   key is `KLUKAI_XAI_API_KEY` from the environment only. Cost prefers
   `usage.cost_in_usd_ticks` (divide by 10^10); a 2k edit is about $0.09 and a
-  vision check about $0.007. A missing key, the daily USD cap (default $3),
+  vision check about $0.007. A missing key, the daily USD cap (default $5),
   or an API failure before any chat token falls back to the account CLI.
   Background memory stays on the CLI. A tracked-file scan rejects `xai-`
   key material.
