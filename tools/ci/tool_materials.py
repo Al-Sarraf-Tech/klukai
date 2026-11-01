@@ -264,7 +264,7 @@ def prepare(root: Path, output: Path, captured: dict[str, Any]) -> dict[str, Any
     require(context_inventory(directory) == expected, "Copied material bytes differ")
     recipe = validate_recipe((directory / "Dockerfile.ci").read_text())
     validate_hash_lock((directory / "requirements-build.txt").read_text(), 3)
-    packages = validate_hash_lock((directory / "requirements-ci.txt").read_text(), 129)
+    packages = validate_hash_lock((directory / "requirements-ci.txt").read_text(), 131)
     archive = output / "context.tar"
     archive_context(directory, archive, epoch)
     return {

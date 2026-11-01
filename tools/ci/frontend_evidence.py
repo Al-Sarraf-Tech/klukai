@@ -27,8 +27,8 @@ COMMAND_FLAGS = {
     "pub": ["pub", "get", "--enforce-lockfile"],
     "format": ["format", "--output=none", "--set-exit-if-changed", "lib", "test"],
     "analyze": ["analyze", "--no-pub", "--fatal-infos"],
-    "vm": ["test", "--no-pub", "--machine"],
-    "chrome": ["test", "--no-pub", "--machine", "--platform", "chrome"],
+    "vm": ["test", "--no-pub", "--machine", "--concurrency=4"],
+    "chrome": ["test", "--no-pub", "--machine", "--concurrency=4", "--platform", "chrome"],
     "build": ["--build-only"],
 }
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")

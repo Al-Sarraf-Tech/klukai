@@ -40,6 +40,8 @@ def observed(tmp_path_factory):
             "-q",
             "-W",
             "error",
+            "-n",
+            "2",
             "-o",
             "asyncio_default_fixture_loop_scope=function",
             "-o",

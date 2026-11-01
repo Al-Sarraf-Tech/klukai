@@ -137,6 +137,8 @@ test-js:
 
 TEST_PYTHON ?= python3
 TGBOT_TEST_PYTHON ?= $(TEST_PYTHON)
+# CI sets this to one pytest-xdist worker per vCPU of the job's VM.
+PYTEST_PARALLEL ?=
 
 test-local:
 	cd docker/core && $(TEST_PYTHON) -m pytest tests/ -q --tb=short --cov=app --cov-report=term-missing --cov-fail-under=95
@@ -148,7 +150,7 @@ test-tgbot:
 	TELEGRAM_BOT_TOKEN=test-token-not-real COMPANION_DIR=/tmp $(TGBOT_TEST_PYTHON) -m pytest tgbot/tests -q --tb=short
 
 test-ops:
-	$(TEST_PYTHON) -m pytest ops/dominus-nobara/tests ops/amarillo/tests -q --tb=short
+	$(TEST_PYTHON) -m pytest ops/dominus-nobara/tests ops/amarillo/tests -q --tb=short $(PYTEST_PARALLEL)
 
 test-voice:
 	cd docker/voice && $(TEST_PYTHON) -m pytest tests -q --tb=short

@@ -100,6 +100,11 @@ amarillo takes over anything still queued.
 | `[self-hosted, Linux, X64, klukai-amarillo-frontend]` | 4 vCPU, 8 GiB (+ zram swap) | frontend |
 | `[self-hosted, Linux, X64, klukai-amarillo-small]` | 2 vCPU, 3 GiB | source-policy/preflight/selection, lint, typecheck, security, final gates |
 
+Owner decision 2026-11-01: tests use every vCPU of their VM. The core suite and
+the ops suite run two `pytest-xdist` workers, and the Flutter suites run four
+test processes. The perf gate stays alone on its VM, because it measures
+latency.
+
 ## How it works
 
 - `klukai_ci_runner.py` (root, `klukai-ci-runner.service`) polls Klukai's

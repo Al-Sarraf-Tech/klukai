@@ -199,7 +199,7 @@ jobs:
           PYTEST_ADDOPTS: "-o asyncio_default_fixture_loop_scope=function -o asyncio_default_test_loop_scope=function"
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
-          make test-ops test-voice TEST_PYTHON="$KLUKAI_COMPONENT_PYTHON"
+          make test-ops test-voice TEST_PYTHON="$KLUKAI_COMPONENT_PYTHON" PYTEST_PARALLEL="-n 2"
           make test-bridge TEST_PYTHON="$KLUKAI_BRIDGE_PYTHON"
       - name: Install locked avatar test dependencies
         run: npm ci --prefix tools/avatar --ignore-scripts

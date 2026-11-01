@@ -211,7 +211,12 @@ def test_retained_bundle_revalidates_raw_streams_and_exact_pwa(tmp_path):
 def test_vm_command_uses_flutter_default_tester_platform():
     # Flutter3.44.2's --platform accepts chrome, not vm. Its default tester
     # still emits machine suite events with platform=vm.
-    assert frontend.COMMAND_FLAGS["vm"] == ["test", "--no-pub", "--machine"]
+    assert frontend.COMMAND_FLAGS["vm"] == [
+        "test",
+        "--no-pub",
+        "--machine",
+        "--concurrency=4",
+    ]
 
 
 @pytest.mark.parametrize("platform", ["vm", "chrome"])

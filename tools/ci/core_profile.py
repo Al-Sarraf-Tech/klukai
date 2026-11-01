@@ -29,7 +29,7 @@ try:
     validate_probe(probe, expected)
     result['probe_packages'] = len(probe['packages'])
     argv = [sys.executable, '-m', 'pytest', 'tests/', '-q', '-W', 'error',
-            '-o', 'cache_dir=/tmp/pytest-cache',
+            '-n', '2', '-o', 'cache_dir=/tmp/pytest-cache',
             '--cov=app', '--cov-branch', '--cov-report=json:/evidence/coverage.json',
             '--cov-report=', '--junitxml=/evidence/junit.xml']
     result['pytest_command'] = argv

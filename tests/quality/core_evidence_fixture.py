@@ -217,6 +217,8 @@ def bundle(tmp_path, observed, monkeypatch):
                     "-q",
                     "-W",
                     "error",
+                    "-n",
+                    "2",
                     "-o",
                     "cache_dir=/tmp/pytest-cache",
                     "--cov=app",

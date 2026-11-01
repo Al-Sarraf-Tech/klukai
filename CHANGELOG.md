@@ -14,6 +14,9 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- CI tests use every vCPU of their VM: two `pytest-xdist` workers for the core
+  and ops suites, and `--concurrency=4` for the Flutter suites. `pytest-xdist`
+  is hash-locked in `docker/core/requirements-ci.txt`.
 - Background text (memory recall, extraction, promises, mood, the daily recap
   and the other background writers) uses Claude Haiku 5.5 at effort `low` when
   `KLUKAI_CLAUDE_PRIMARY=true` and `ANTHROPIC_API_KEY` are set. A failure goes to

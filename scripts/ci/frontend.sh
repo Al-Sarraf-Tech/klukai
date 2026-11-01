@@ -111,7 +111,8 @@ for platform in vm chrome; do
   # does not accept --platform vm. Chrome requires explicit selection.
   platform_args=()
   if [[ "$platform" == chrome ]]; then platform_args=(--platform chrome); fi
-  run "$platform" "$FLUTTER" test --no-pub --machine "${platform_args[@]}" "${tests[@]}"
+  # One test process per vCPU of the frontend VM.
+  run "$platform" "$FLUTTER" test --no-pub --machine --concurrency=4 "${platform_args[@]}" "${tests[@]}"
   python3 "$EVIDENCE" machine "$OUTPUT/raw/$platform.stdout" --platform "$platform" --exit-code 0
 done
 
