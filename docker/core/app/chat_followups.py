@@ -9,6 +9,7 @@ from typing import Any
 import logging
 
 from .extraction_llm import ExtractionCancelled
+from .helpers import is_trivial_message
 from .models import SessionState
 from .picture_curation import PictureCuration
 from .ws_manager import WSManager
@@ -182,12 +183,9 @@ class ChatFollowups:
 
         # Background: extract facts and create episodes
         # Skip extraction for trivial messages (no facts to extract, saves a full LLM round-trip)
-        content_stripped = content.strip().lower().rstrip("!.?)")
-        is_trivial = content_stripped in self.trivial_patterns or (
-            len(content_stripped) <= 5 and not image_triggered
-        )
-
-        if not is_trivial:
+        if not is_trivial_message(
+            content, self.trivial_patterns, image_triggered=image_triggered
+        ):
             extraction_snapshot = session.model_copy(deep=True)
 
             async def _safe_extraction() -> None:

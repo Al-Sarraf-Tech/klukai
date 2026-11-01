@@ -165,6 +165,15 @@ async def _session_cleanup_loop() -> None:
                 logger.info("Purged %d expired fact rows", purged)
         except Exception:
             logger.warning("Expired fact purge failed; will retry", exc_info=True)
+        try:
+            from . import memory_exchange
+
+            await memory_exchange.restore_lost_exchanges()
+        except Exception as error:
+            # Its type only: a database error can quote the row, chat text included.
+            logger.warning(
+                "Lost exchange restore failed (%s); will retry", type(error).__name__
+            )
 
 
 async def _cancel_task(task: asyncio.Task[Any]) -> None:

@@ -5,6 +5,7 @@ No I/O, no state, no imports from other app modules.
 
 from __future__ import annotations
 
+from collections.abc import Collection
 import re
 from typing import TYPE_CHECKING
 
@@ -276,6 +277,18 @@ TRIVIAL_PATTERNS = {
     "agreed",
     "understood",
 }
+
+
+def is_trivial_message(
+    content: str,
+    patterns: Collection[str] = TRIVIAL_PATTERNS,
+    *,
+    image_triggered: bool = False,
+) -> bool:
+    """A message with nothing to remember, so extraction skips the turn."""
+    stripped = content.strip().lower().rstrip("!.?)")
+    return stripped in patterns or (len(stripped) <= 5 and not image_triggered)
+
 
 # ── Jealousy detection ──────────────────────────────────────────────────────
 

@@ -46,6 +46,48 @@ _EXCHANGES_RECENT_SQL = (
 )
 
 
+# A turn counts as lost once its reply is an hour old: a queued extraction waits
+# for a quiet gap, so a long conversation can hold it back that far. Its text
+# matches on his side only, because a stored reply can differ from the logged
+# one. Her own proactive lines are left out so one arriving mid-turn cannot pass
+# for the reply. The reply's id makes a repeat run a no-op.
+_LOST_TURNS_SQL = """
+WITH turns AS (
+    SELECT role, content, user_id, conversation_id, created_at,
+           LEAD(role) OVER ordered AS reply_role,
+           LEAD(id) OVER ordered AS reply_id,
+           LEAD(content) OVER ordered AS reply,
+           LEAD(mood) OVER ordered AS reply_mood,
+           LEAD(created_at) OVER ordered AS reply_at
+    FROM companion_messages
+    WHERE content_type = 'text' AND created_at > NOW() - INTERVAL '30 days'
+    WINDOW ordered AS (PARTITION BY conversation_id ORDER BY created_at, id)
+)
+SELECT t.reply_id::text, t.conversation_id::text, t.user_id,
+       t.content, t.reply, t.reply_mood, t.reply_at
+FROM turns AS t
+WHERE t.role = 'user'
+  AND t.reply_role = 'assistant'
+  AND t.reply_at < NOW() - INTERVAL '1 hour'
+  AND NOT EXISTS (
+      SELECT 1 FROM companion_exchanges AS x
+      WHERE x.user_id = t.user_id
+        AND x.user_content = t.content
+        AND x.created_at >= t.created_at
+        AND x.created_at < t.created_at + INTERVAL '1 day'
+  )
+"""
+_RESTORE_SQL = (
+    "INSERT INTO companion_exchanges "
+    "(id, conversation_id, user_content, assistant_content, topics, mood, "
+    "importance, user_id, created_at) "
+    "VALUES (%s, %s, %s, %s, '{}', %s, %s, %s, %s) "
+    "ON CONFLICT (id) DO NOTHING"
+)
+# What extraction gives a turn it does not single out to remember.
+_RESTORED_IMPORTANCE = 0.4
+
+
 def _exchange_text(row: tuple[Any, ...]) -> str:
     """What Haiku reads for one exchange candidate."""
     _, user_content, assistant_content, topics, _, _, created_at = row
@@ -202,6 +244,41 @@ class ExchangeMemoryMixin:
 
         exchanges.sort(key=lambda x: x["final_score"], reverse=True)
         return exchanges[:limit]
+
+
+async def restore_lost_exchanges() -> int:
+    """Put back turns her exchange memory never got. Returns how many.
+
+    The message log is written during the turn. The exchange comes later from
+    a queue held in memory, so a restart, a full backlog, repeated preemption
+    or a database blip can lose it. Insert-only: a stored row is never changed.
+    """
+    from .db import get_conn_autocommit
+    from .helpers import is_trivial_message
+
+    restored = 0
+    async with get_conn_autocommit() as conn:
+        rows = await (await conn.execute(_LOST_TURNS_SQL)).fetchall()
+        for reply_id, conversation_id, user_id, said, reply, mood, at in rows:
+            if is_trivial_message(said):
+                continue  # extraction skipped these on purpose
+            cursor = await conn.execute(
+                _RESTORE_SQL,
+                (
+                    reply_id,
+                    conversation_id,
+                    said,
+                    reply,
+                    mood or "composed",
+                    _RESTORED_IMPORTANCE,
+                    user_id,
+                    at,
+                ),
+            )
+            restored += cursor.rowcount
+    if restored:
+        logger.info("Restored %d lost exchange(s) from the message log", restored)
+    return restored
 
 
 # Explicit unbound exports retain existing controlled-test injection seams.

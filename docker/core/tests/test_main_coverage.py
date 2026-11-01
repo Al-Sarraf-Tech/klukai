@@ -830,6 +830,43 @@ class TestLifespan:
                 await main._session_cleanup_loop()
         assert purge.await_count == 2
 
+    async def test_cleanup_restores_lost_exchanges_every_cycle(self, monkeypatch):
+        monkeypatch.setattr("app.auth.cleanup_expired_sessions", AsyncMock())
+        monkeypatch.setattr("app.fact_store.purge_expired", AsyncMock(return_value=0))
+        restore = AsyncMock(return_value=2)
+        monkeypatch.setattr("app.memory_exchange.restore_lost_exchanges", restore)
+        calls = 0
+
+        async def sleep_then_cancel(_secs):
+            nonlocal calls
+            calls += 1
+            if calls >= 3:
+                raise asyncio.CancelledError
+
+        with patch("app.main.asyncio.sleep", new=sleep_then_cancel):
+            with pytest.raises(asyncio.CancelledError):
+                await main._session_cleanup_loop()
+        assert restore.await_count == 2
+
+    async def test_a_failed_restore_does_not_stop_the_loop(self, monkeypatch, caplog):
+        monkeypatch.setattr("app.auth.cleanup_expired_sessions", AsyncMock())
+        monkeypatch.setattr("app.fact_store.purge_expired", AsyncMock(return_value=0))
+        restore = AsyncMock(side_effect=RuntimeError("postgres down"))
+        monkeypatch.setattr("app.memory_exchange.restore_lost_exchanges", restore)
+        calls = 0
+
+        async def sleep_then_cancel(_secs):
+            nonlocal calls
+            calls += 1
+            if calls >= 3:
+                raise asyncio.CancelledError
+
+        with patch("app.main.asyncio.sleep", new=sleep_then_cancel):
+            with pytest.raises(asyncio.CancelledError):
+                await main._session_cleanup_loop()
+        assert restore.await_count == 2
+        assert "Lost exchange restore failed" in caplog.text
+
 
 @pytest.mark.parametrize("cancelled", [False, True])
 async def test_lifespan_owns_handoff_before_closing_dependencies(

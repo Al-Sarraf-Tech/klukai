@@ -14,6 +14,14 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- Her long-term memory gets back turns it lost. The exchange for a turn is
+  written from a queue held in memory, so a restart, a full backlog, repeated
+  preemption or a database blip lost it for good, although the message log still
+  had the turn. On Amarillo's reboot on 2026-11-01, Postgres stopped 30 seconds
+  before the core and took one with it. An hourly pass now restores any
+  non-trivial turn from the last 30 days that has no exchange, keeping its own
+  time. It only inserts and never changes a stored row. A dry run on production
+  found 41 turns: 23 of the owner's, 17 of the test account's and 1 of tj's.
 - Pictures set on the Elmo no longer fail for what their own prompt asked for.
   Both pictures the checker rejected twice were Elmo scenes: the prompt named
   "the Elmo" and "tank treads" inside a room, and the model painted "ELMO" on the
