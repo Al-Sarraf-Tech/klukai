@@ -183,7 +183,7 @@ class HerPOVPipeline:
                     await ws.send_proactive(
                         user_id,
                         "…Visualization failed. Interference in the rendering pipeline. "
-                        "I'll try again later.",
+                        "Ask me again.",
                         persist=False,
                     )
                     await ws.send(

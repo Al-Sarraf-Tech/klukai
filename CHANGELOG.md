@@ -14,6 +14,16 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- Her scheduled lines no longer repeat. In 14 days, 93 of her 206 replies were
+  canned lines picked at random with no memory, and one pool of 5 lines went out
+  35 times. She now skips what she sent recently, across restarts, and sends the
+  oldest line once a pool is used up.
+- She keeps 8 to 12 conversation turns word for word, up from 4 to 8, before
+  older turns become a summary.
+- "One moment, Commander." waits 5 s instead of 2.5 s, because a normal reply at
+  xhigh takes 2.5 to 4 s.
+- A picture that never arrives logs its status, and an xAI failure logs its type
+  and HTTP status. A failed Her POV no longer promises a retry that never happens.
 - CI tests use every vCPU of their VM: two `pytest-xdist` workers for the core
   and ops suites, and `--concurrency=4` for the Flutter VM suite. `pytest-xdist`
   is hash-locked in `docker/core/requirements-ci.txt`.

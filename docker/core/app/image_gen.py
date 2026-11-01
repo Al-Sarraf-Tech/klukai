@@ -125,7 +125,11 @@ async def generate_image(
             # Her POV) held the worker's one slot; "busy" proves this was never
             # accepted, so it goes next, once.
             result = await submit_agy_image(description, **request)
-        return result.get("image") if result.get("status") == "completed" else None
+        if result.get("status") == "completed":
+            return result.get("image")
+        # Her POV reports only that it failed. Nothing else records why.
+        logger.warning("No picture for %s: status=%s", user_id, result.get("status"))
+        return None
     if provider == "openai":
         return await image_provider.generate_cloud_image(
             prompt,

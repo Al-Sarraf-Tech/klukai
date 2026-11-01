@@ -49,6 +49,10 @@ _conversation: contextvars.ContextVar[str] = contextvars.ContextVar(
 class XaiChatError(RuntimeError):
     """A chat call that should fall back to the CLI, or stop if text already flowed."""
 
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
+
 
 class XaiAuthError(XaiChatError):
     """The key was rejected. This is not an outage."""
@@ -266,7 +270,7 @@ async def iter_text(
                     if status in {401, 403}:
                         auth_failed = True
                     elif status != 200:
-                        raise XaiChatError("xai chat failed")
+                        raise XaiChatError("xai chat failed", status=status)
                     else:
                         size = 0
                         async for line in response.aiter_lines():
@@ -354,7 +358,7 @@ async def complete_text(
                 if response.status_code in {401, 403}:
                     pass
                 elif response.status_code != 200:
-                    raise XaiChatError("xai chat failed")
+                    raise XaiChatError("xai chat failed", status=response.status_code)
                 else:
                     raw = response.content
                     if len(raw) > _MAX_BODY:

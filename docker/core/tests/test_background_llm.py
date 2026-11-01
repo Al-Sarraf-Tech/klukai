@@ -427,3 +427,18 @@ async def test_other_background_callers_stay_on_the_cli(haiku, monkeypatch, call
     assert await bg.text(caller, "p", max_tokens=50) == SECRET_REPLY
     api.assert_not_awaited()
     haiku.assert_awaited()
+
+
+async def test_an_xai_failure_logs_its_reason_without_the_key(haiku, monkeypatch, caplog):
+    from app.xai_chat import XaiChatError
+
+    monkeypatch.setenv("KLUKAI_XAI_API_KEY", "xai-secret-value-for-this-test")
+    monkeypatch.setattr(
+        "app.xai_chat.complete_text",
+        AsyncMock(side_effect=XaiChatError("xai-secret-value-for-this-test", status=503)),
+    )
+    with caplog.at_level(logging.WARNING, logger="app.background_llm"):
+        await bg.text("her_pov", "p", max_tokens=200)
+    lines = [r.getMessage() for r in caplog.records if "xAI her_pov failed" in r.getMessage()]
+    assert len(lines) == 1 and "HTTP 503" in lines[0]
+    assert "xai-secret-value-for-this-test" not in caplog.text

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from app.chat_reply import WARMUP_NOTICE_S
 from app.chat_reply import ChatReplyRuntime
 from app.llm_router import LLMConfig, LLMStreamFailed
 from app.models import SessionState
@@ -95,7 +96,7 @@ async def test_reply_waits_for_started_notifier_finalizer(monkeypatch, token_cou
     actual_sleep = asyncio.sleep
 
     async def quick_sleep(delay):
-        await actual_sleep(0 if delay == 2.5 else delay)
+        await actual_sleep(0 if delay == WARMUP_NOTICE_S else delay)
 
     monkeypatch.setattr(asyncio, "sleep", quick_sleep)
 

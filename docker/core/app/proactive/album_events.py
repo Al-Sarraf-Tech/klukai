@@ -186,7 +186,7 @@ class AlbumEventsMixin(_EngineBase):
             message = ""
 
         if not message or not message.strip():
-            message = random.choice(fallback_lines)
+            message = self._fresh_line(fallback_lines)
 
         if self._on_message_callback:
             self._memory_recall_delivered_today = True

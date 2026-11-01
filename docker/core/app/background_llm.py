@@ -81,7 +81,11 @@ async def _from_api(
         text = await complete_text(system_text, prompt, max_tokens=8192, timeout=120.0)
     except XaiCapError:
         reason = "capped->cli"
-    except XaiChatError:
+    except XaiChatError as error:
+        # Its type and HTTP status only: never its text.
+        logger.warning(
+            "xAI %s failed (%s, HTTP %s)", caller, type(error).__name__, error.status
+        )
         reason = "failed->cli"
     except Exception as error:
         logger.warning("xAI %s failed (%s)", caller, type(error).__name__)

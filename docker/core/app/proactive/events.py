@@ -6,6 +6,7 @@ romance window, and the daily recap. All wall-clock reads go through
 """
 
 from __future__ import annotations
+from collections.abc import Sequence
 from typing import Any
 
 
@@ -129,8 +130,17 @@ def _spontaneous_art_pieces() -> list[dict[str, Any]]:
     return _read_spontaneous_art_pieces(_raw_content)
 
 
+def fresh_line(pool: list[str], recent: Sequence[str]) -> str:
+    """A line not in ``recent`` (oldest first); if all are, the oldest sent."""
+    last_sent = {line: index for index, line in enumerate(recent)}
+    fresh = [line for line in pool if line not in last_sent]
+    if fresh:
+        return str(random.choice(fresh))
+    return min(pool, key=lambda line: last_sent[line])
+
+
 def _select_lore_message(
-    events: dict[str, Any], p: dict[str, Any], level: int
+    events: dict[str, Any], p: dict[str, Any], level: int, recent: Sequence[str] = ()
 ) -> str | None:
     # Build eligible categories based on affection level
     eligible = []
@@ -150,6 +160,18 @@ def _select_lore_message(
 
     if not eligible:
         return None
+
+    # A category she has used up steps aside. Once all of them are used up, the
+    # line she sent longest ago goes next.
+    sent = set(recent)
+    unused = [
+        (category, weight, [line for line in messages if line not in sent])
+        for category, weight, messages in eligible
+    ]
+    unused = [row for row in unused if row[2]]
+    if not unused:
+        return fresh_line([line for row in eligible for line in row[2]], recent)
+    eligible = unused
 
     # Weighted random selection
     total_weight = sum(w for _, w, _ in eligible)
@@ -253,7 +275,9 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
         except Exception:
             return
 
-        message = _select_lore_message(events, p, self._affection_level)
+        message = _select_lore_message(
+            events, p, self._affection_level, self._recent_lines
+        )
         if message is None:
             return
 
@@ -314,7 +338,7 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
         is_stressed = self._last_mood in NEGATIVE_MOODS
 
         if is_stressed:
-            message = random.choice(_comfort_lines())
+            message = self._fresh_line(_comfort_lines())
         elif self._affection_level >= 5:
             # LLM-generated context-aware romance at high affection
             try:

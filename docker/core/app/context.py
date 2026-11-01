@@ -43,6 +43,9 @@ def set_last_memory_id(user_id: str, memory_id: str) -> None:
     _last_memory_ids[user_id] = memory_id
 
 
-# Compaction threshold — compact oldest turns when session exceeds this
-COMPACT_THRESHOLD = 8
-COMPACT_KEEP_RAW = 4  # Keep this many recent turns verbatim after compaction
+# Compaction threshold — compact oldest turns when session exceeds this. These
+# were 8 and 4 when her model was small and local, which left her only two to
+# four exchanges word for word. Her persona is cached now, so history is cheap.
+# Stay below HISTORY_LIMIT: past it, turns drop without being summarized.
+COMPACT_THRESHOLD = 12
+COMPACT_KEEP_RAW = 8  # Keep this many recent turns verbatim after compaction

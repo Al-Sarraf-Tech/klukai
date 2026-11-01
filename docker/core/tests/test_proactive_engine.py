@@ -160,11 +160,13 @@ class TestProactiveEngineSetters:
         e.set_last_mood("playful", user_id="bob")
         assert e._moods == {"alice": "tender", "bob": "playful"}
 
-    def test_set_callback(self):
+    @pytest.mark.asyncio
+    async def test_set_callback(self):
         e = ProactiveEngine()
-        cb = MagicMock()
+        cb = AsyncMock(return_value=True)
         e.set_callback(cb)
-        assert e._on_message_callback is cb
+        assert await e._on_message_callback("hi") is True
+        cb.assert_awaited_once_with("hi")
 
     def test_set_recap_callback(self):
         e = ProactiveEngine()

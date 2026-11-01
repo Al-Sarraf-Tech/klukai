@@ -17,6 +17,9 @@ from .ws_manager import WSManager
 
 logger = logging.getLogger(__name__)
 
+# At xhigh, a normal reply takes 2.5-4 s. Say something only if it runs longer.
+WARMUP_NOTICE_S = 5.0
+
 
 @dataclass(frozen=True)
 class ChatReply:
@@ -127,7 +130,7 @@ class ChatReplyRuntime:
         # Typing is already on (sent when the turn was accepted). If the
         # model is still quiet, say so in character well before the old 8s line.
         async def _warmup_notify() -> None:
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(WARMUP_NOTICE_S)
             await self.ws.send_thinking(user_id, "One moment, Commander.")
 
         warmup_timer: asyncio.Task[Any] | None = asyncio.create_task(_warmup_notify())

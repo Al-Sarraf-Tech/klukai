@@ -546,8 +546,8 @@ class TestBackgroundDispatch:
     async def test_compaction_scheduled_past_threshold(self):
         from app.chat_handlers import _handle_message
 
-        # Pre-load 8 turns; +1 user +1 assistant pushes len(turns) >= 8.
-        turns = [{"role": "user", "content": f"t{i}"} for i in range(8)]
+        # Pre-load 11 turns; +1 user +1 assistant pushes len(turns) past 12.
+        turns = [{"role": "user", "content": f"t{i}"} for i in range(11)]
         session = _fresh_session(turns=turns)
         with _patched_pipeline(stream_tokens=["Reply."]) as ns:
             await _handle_message("A substantive message goes here", session)

@@ -9,14 +9,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
-import random
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from ..events import publish as publish_event
-from .events import EventsMixin
+from .events import EventsMixin, fresh_line
 from .schedule import register_schedule
 from .scheduler_listeners import register_listeners
 from .lifecycle import SchedulerLifecycleMixin
@@ -42,6 +41,10 @@ from .templates import (
 )
 
 logger = logging.getLogger(__name__)
+
+# How many of her latest lines to avoid repeating. Her scheduled pools hold about
+# 36 lines, and she sends roughly 200 messages in two weeks.
+RECENT_LINE_MEMORY = 300
 
 # After "gotta go" she stays quiet this long; after "goodnight", until morning.
 LEAVE_HOLD = timedelta(minutes=90)
@@ -100,6 +103,7 @@ class ProactiveEngine(
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._scheduled_tasks: set[asyncio.Task[Any]] = set()
         self._closing = False
+        self._recent_lines: list[str] = []
         self._romance_delivered: dict[str, bool] = {}
         self._dream_delivered: dict[str, bool] = {}
         self._user_messaged: dict[str, bool] = {}
@@ -137,8 +141,41 @@ class ProactiveEngine(
         return logger
 
     def set_callback(self, callback: Any) -> None:
-        """Set callback for delivering proactive messages."""
-        self._on_message_callback = callback
+        """Set callback for delivering proactive messages.
+
+        Every line that reaches someone is remembered, so she does not repeat it.
+        """
+
+        async def remembering(message: str, *args: Any, **kwargs: Any) -> Any:
+            result = await callback(message, *args, **kwargs)
+            if result is not False:
+                self._remember_line(message)
+            return result
+
+        self._on_message_callback = remembering
+
+    def _remember_line(self, message: str) -> None:
+        self._recent_lines.append(message)
+        del self._recent_lines[: -RECENT_LINE_MEMORY or None]
+
+    async def _load_recent_lines(self) -> None:
+        """Pick up what she sent before this process started."""
+        from ..conversation_continuity import load_recent_assistant_replies
+        from ..decisions import PRIMARY_USER
+
+        try:
+            stored = await load_recent_assistant_replies(
+                PRIMARY_USER, RECENT_LINE_MEMORY
+            )
+        except Exception as error:
+            logger.warning("Recent lines unavailable (%s)", type(error).__name__)
+            return
+        self._recent_lines[:0] = list(reversed(stored))
+        del self._recent_lines[: -RECENT_LINE_MEMORY or None]
+
+    def _fresh_line(self, pool: list[str]) -> str:
+        """A line she has not sent lately; if she has sent them all, the oldest."""
+        return fresh_line(pool, self._recent_lines)
 
     def set_recap_callback(self, callback: Any) -> None:
         """Set callback for generating daily recap (calls LLM)."""
@@ -237,6 +274,7 @@ class ProactiveEngine(
 
     async def _catch_up_missed(self) -> None:
         """Run allowlisted jobs whose fire time passed while she was down."""
+        await self._load_recent_lines()
         from .durability import run_catch_up
 
         jobs = [(job.id, job.trigger, job.func) for job in self._scheduler.get_jobs()]
@@ -351,7 +389,7 @@ class ProactiveEngine(
         available = sorted(messages.keys())
         level = max((k for k in available if k <= self._affection_level), default=0)
         pool = messages.get(level, messages.get(0, ["..."]))
-        return random.choice(pool)
+        return self._fresh_line(pool)
 
     async def _deliver(self, message: str) -> bool:
         """Deliver a proactive message. Returns True iff it was actually sent
