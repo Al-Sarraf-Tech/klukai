@@ -868,7 +868,7 @@ class TestImageGen:
             await bg.background_image_gen("draw yourself", user_id="u1")
         place.assert_awaited_once_with("u1", 5)
         prompt = generate.await_args.args[0]
-        assert "the vehicle hangar inside a colossal armored land vehicle" in prompt
+        assert "the vehicle hangar, windowless riveted steel interior" in prompt
         assert "naval vessel" in prompt  # the avoid list, never the scene
         assert generate.repeat_claim.await_args.args[1] == explicit_request_id(
             "u1", "draw yourself", 832, 1216, False, "hangar"

@@ -203,3 +203,17 @@ def test_rubric_rejects_drift_away_from_2d_anime():
     import claude_image_check as check
     assert "- style: the render is photorealistic, photographic, 3D-rendered or semi-realistic" in check.RUBRIC
     assert "style differences" not in check.RUBRIC
+
+
+def test_fix_hint_does_not_repeat_the_lettering_it_rejected(check):
+    # The retry was told to avoid "Large red 'ELMO'S' text", and painted 'ELMO'
+    # again. A word in quotes is the last thing an image model should be shown.
+    hint = check.fix_hint([
+        {"severity": "major", "what": "Large red 'ELMO'S' text is visible on the ceiling"},
+        {"severity": "major", "what": 'A sign reading "OPEN" hangs behind her'},
+        {"severity": "major", "what": "The Commander's shirt has a ‘Communar’ name tape"},
+    ])
+    for word in ("ELMO", "OPEN", "Communar"):
+        assert word not in hint
+    assert "Large red lettering text is visible on the ceiling" in hint
+    assert "The Commander's shirt" in hint

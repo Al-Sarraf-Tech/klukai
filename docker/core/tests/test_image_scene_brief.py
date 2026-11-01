@@ -784,11 +784,12 @@ class TestLexicon:
     def test_elmo_is_never_a_ship(self):
         for place in sc.PLACES.values():
             if place.elmo:
-                assert sc.ELMO in place.tags or "Elmo" in place.tags, place.key
+                assert sc.ELMO in place.tags or sc.ELMO_INTERIOR in place.tags, place.key
                 assert not SHIPLIKE.search(place.tags), place.key
-                assert not SHIPLIKE.search(f"{place.window} {place.night_view}"), (
-                    place.key
-                )
+                if place.window is not None:
+                    assert not SHIPLIKE.search(f"{place.window} {place.night_view}"), (
+                        place.key
+                    )
 
     def test_place_actions_stay_sfw(self):
         cues = " ".join(a for p in sc.PLACES.values() for a in p.actions)

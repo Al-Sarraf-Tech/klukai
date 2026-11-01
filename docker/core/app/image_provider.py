@@ -174,7 +174,17 @@ def cloud_images_ready() -> bool:
         return False
 
 
+# Image models paint a name they are given as lettering. Every path to the image
+# model passes through _plain_description, including words he or she typed.
+_ELMO_NAME = re.compile(r"\b(?:the\s+)?elmo(?:(?P<possessive>['’]s))?\b", re.I)
+
+
+def _unnamed_base(match: re.Match[str]) -> str:
+    return "the mobile base's" if match["possessive"] else "the mobile base"
+
+
 def _plain_description(text: str) -> str:
+    text = _ELMO_NAME.sub(_unnamed_base, text)
     text = re.sub(r"<\s*(?:lora|lyco|embedding)\s*:[^>]*>", "", text, flags=re.I)
     text = re.sub(r"\bembedding:[^,\s]+", "", text, flags=re.I)
     text = text.replace(r"\(", "(").replace(r"\)", ")")

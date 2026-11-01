@@ -9,6 +9,7 @@ verdict text and errors never reach logs; callers get a bounded verdict.
 """
 from __future__ import annotations
 
+import re
 import base64
 import io
 import json
@@ -191,9 +192,14 @@ def run(candidate: bytes, value: dict, references: dict, *, timeout: float) -> d
     return verdict
 
 
+# Quoted words in an issue are text the checker read in the image. A word shown to
+# an image model tends to get painted, so the retry never repeats them.
+_QUOTED = re.compile(r"""(?<!\w)['"\u2018\u201c].{1,60}?['"\u2019\u201d](?!\w)""")
+
+
 def fix_hint(issues: list[dict]) -> str:
     """Major issues as a short, bounded correction for one re-render."""
-    major = [i["what"] for i in issues
+    major = [_QUOTED.sub("lettering", i["what"]) for i in issues
              if isinstance(i, dict) and i.get("severity") == "major" and isinstance(i.get("what"), str)][:3]
     if not major:
         return ""

@@ -12,6 +12,17 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Fixed
+
+- Pictures set on the Elmo no longer fail for what their own prompt asked for.
+  Both pictures the checker rejected twice were Elmo scenes: the prompt named
+  "the Elmo" and "tank treads" inside a room, and the model painted "ELMO" on the
+  ceiling and treads in the room. It also named "the armored viewports", and the
+  model painted a desert through them on an indoor-only scene. Rooms on the Elmo
+  are now windowless, lit from inside, and never mention its outside. The name is
+  removed on every path to the image model, and the retry hint no longer repeats
+  lettering the checker read.
+
 ### Changed
 
 - Her scheduled lines no longer repeat. In 14 days, 93 of her 206 replies were

@@ -52,6 +52,11 @@ _LATE = frozenset({"evening", "night"})
 
 # The Elmo is a LAND vessel. Its wording never borrows from ships.
 ELMO = "a colossal armored land vehicle on tank treads"
+# A room never mentions the vehicle's outside or its name. Told "inside the Elmo,
+# a colossal armored land vehicle on tank treads", the image model painted "ELMO"
+# on the ceiling and treads in the room, and the checker failed the job. Told "the
+# armored viewports", it painted a desert through them. The rooms have no windows.
+ELMO_INTERIOR = "windowless riveted steel interior of an armored land base"
 ELMO_AVOID = "ship, boat, ocean, sea, harbor, naval vessel"
 INDOOR_AVOID = "outdoor scenery, open sky"
 
@@ -72,7 +77,7 @@ class Place:
     elmo: bool = False  # aboard or on the Elmo
     specificity: int = 1  # 0 generic, 1 area, 2 room or spot
     light: str = "warm lamp light"
-    window: str = "the window"
+    window: str | None = "the window"  # None: no window, so no sky or weather
     night_view: str = "city lights"
     actions: tuple[str, ...] = ()  # candid solo actions that belong here
     commander: str | None = None  # his outfit when his words set none
@@ -89,8 +94,7 @@ def _place(
 _ELMO_INSIDE = {
     "elmo": True,
     "light": "warm work lights",
-    "window": "the armored viewports",
-    "night_view": "the dark wasteland",
+    "window": None,
 }
 
 PLACES: dict[str, Place] = {
@@ -493,7 +497,7 @@ PLACES: dict[str, Place] = {
             "the Elmo",
             True,
             "elmo, aboard, on board, onboard, mobile base, the base, mbv",
-            f"inside the Elmo, {ELMO} serving as a mobile base, steel corridors",
+            f"{ELMO_INTERIOR}, steel corridors",
             specificity=0,
             **_ELMO_INSIDE,
         ),
@@ -503,7 +507,7 @@ PLACES: dict[str, Place] = {
             False,
             "elmo deck, elmo's deck, deck of the elmo, top deck, upper deck, outer deck, "
             "observation deck, on deck, the deck, topside, elmo's roof, roof of the elmo",
-            f"on the armored roof of the Elmo, {ELMO}, steel walkway with railings, "
+            f"on the armored roof of {ELMO}, steel walkway with railings, "
             "antennas, dusty plains stretching to the horizon",
             specificity=2,
             elmo=True,
@@ -519,8 +523,8 @@ PLACES: dict[str, Place] = {
             True,
             "command deck, command center, command centre, command room, control room, "
             "command bridge, nav console, tactical room, ops room, operations room, war room",
-            f"the Elmo's command center inside {ELMO}, banks of glowing tactical monitors, "
-            "holographic map table, armored viewports",
+            f"a command center, {ELMO_INTERIOR}, banks of glowing tactical monitors, "
+            "holographic map table",
             specificity=2,
             **{**_ELMO_INSIDE, "light": "glow of tactical monitors"},
             actions=(
@@ -534,7 +538,7 @@ PLACES: dict[str, Place] = {
             "the Elmo's hangar",
             True,
             "hangar, hangar bay, vehicle bay, motor pool, repair bay",
-            f"the vehicle hangar inside {ELMO}, a motorcycle on a work stand, tool racks, "
+            f"the vehicle hangar, {ELMO_INTERIOR}, a motorcycle on a work stand, tool racks, "
             "oil-stained steel floor",
             specificity=2,
             wardrobe="garage",
@@ -545,7 +549,7 @@ PLACES: dict[str, Place] = {
             "the Elmo's firing range",
             True,
             "firing range, shooting range, the range, gun range, target practice",
-            f"the firing range inside {ELMO}, shooting lanes, paper targets, "
+            f"the firing range, {ELMO_INTERIOR}, shooting lanes, paper targets, "
             "ear protection on hooks",
             specificity=2,
             wardrobe="training",
@@ -556,7 +560,7 @@ PLACES: dict[str, Place] = {
             "the Elmo's training room",
             True,
             "training room, sparring mat, dojo, drill hall",
-            f"the training room inside {ELMO}, padded mats, weight racks, punching bags",
+            f"the training room, {ELMO_INTERIOR}, padded mats, weight racks, punching bags",
             specificity=2,
             wardrobe="training",
             **{**_ELMO_INSIDE, "light": "bright overhead lights"},
@@ -566,7 +570,7 @@ PLACES: dict[str, Place] = {
             "the Elmo's armory",
             True,
             "armory, armoury, weapons locker, gun rack, weapons bay",
-            f"the armory inside {ELMO}, racks of rifles, ammunition crates, "
+            f"the armory, {ELMO_INTERIOR}, racks of rifles, ammunition crates, "
             "workbench with a cleaning kit",
             specificity=2,
             **_ELMO_INSIDE,
@@ -577,7 +581,7 @@ PLACES: dict[str, Place] = {
             "the Elmo's rec room",
             True,
             "rec room, recreation room, game room, gaming room, arcade, pool table",
-            f"the rec room inside {ELMO}, worn couch, big screen with a game on, "
+            f"the rec room, {ELMO_INTERIOR}, worn couch, big screen with a game on, "
             "scattered controllers",
             specificity=2,
             **{**_ELMO_INSIDE, "light": "glow of the big screen"},
@@ -592,7 +596,7 @@ PLACES: dict[str, Place] = {
             True,
             "logistics bay, supply bay, cargo bay, storage bay, supply room, storeroom, "
             "quartermaster",
-            f"the logistics bay inside {ELMO}, stacked supply crates, shelving, "
+            f"the logistics bay, {ELMO_INTERIOR}, stacked supply crates, shelving, "
             "inventory terminals",
             specificity=2,
             **_ELMO_INSIDE,
@@ -603,7 +607,7 @@ PLACES: dict[str, Place] = {
             "the Elmo's mess hall",
             True,
             "mess hall, the mess, canteen, cafeteria, dining hall",
-            f"the mess hall inside {ELMO}, long metal tables, food trays, serving counter",
+            f"the mess hall, {ELMO_INTERIOR}, long metal tables, food trays, serving counter",
             specificity=2,
             **_ELMO_INSIDE,
             actions=("holding a food tray", "sitting at a long table"),
@@ -613,7 +617,7 @@ PLACES: dict[str, Place] = {
             "the Tea Time counter",
             True,
             "tea counter, tea time counter, tea time, behind the counter, racing calm",
-            f"the Tea Time counter in the lounge of {ELMO}, teapots and cups, "
+            f"the Tea Time counter in a lounge, {ELMO_INTERIOR}, teapots and cups, "
             "warm pendant lights",
             specificity=2,
             wardrobe="tea",
@@ -624,7 +628,7 @@ PLACES: dict[str, Place] = {
             "the Elmo's lounge",
             True,
             "lounge, the lounge, common room, break room",
-            f"the lounge inside {ELMO}, couches, low coffee table, warm pendant lights",
+            f"the lounge, {ELMO_INTERIOR}, couches, low coffee table, warm pendant lights",
             specificity=2,
             **_ELMO_INSIDE,
             actions=("sitting on the couch, legs crossed", "pretending to read a book"),
@@ -635,14 +639,10 @@ PLACES: dict[str, Place] = {
             True,
             "your quarters, your room, your bedroom, your bed, your bunk, your place, "
             "her quarters, her room, quarters, bunk",
-            f"Klukai's quarters inside {ELMO}, neatly made bunk, small desk with a lamp, "
+            f"Klukai's quarters, {ELMO_INTERIOR}, neatly made bunk, small desk with a lamp, "
             "sketchbook",
             specificity=2,
-            **{
-                **_ELMO_INSIDE,
-                "light": "dim desk lamp",
-                "window": "a small armored viewport",
-            },
+            **{**_ELMO_INSIDE, "light": "dim desk lamp"},
             actions=("sitting at her desk, sketching", "leaning against the doorframe"),
         ),
         _place(
@@ -650,7 +650,7 @@ PLACES: dict[str, Place] = {
             "the Elmo's perimeter",
             False,
             "perimeter, the perimeter, patrol route",
-            f"the perimeter around the parked Elmo, {ELMO}, dusty ground, floodlights",
+            f"the perimeter around {ELMO}, parked on dusty ground, floodlights",
             elmo=True,
         ),
         # ── Neutral settings (only ever a default) ──────────────────────────
@@ -1086,6 +1086,8 @@ def time_tags(
     if not indoor:
         return (_OUTDOOR_TIME_GREY if weather else _OUTDOOR_TIME)[time]
     w = place.window
+    if w is None:
+        return f"{time}, {place.light}"
     return {
         "morning": f"morning, soft daylight through {w}",
         "afternoon": f"afternoon, daylight through {w}",
@@ -1096,7 +1098,7 @@ def time_tags(
 
 def weather_tags(place: Place, weather: str | None, *, indoor: bool) -> str:
     """Weather seen from where she is: on the window indoors, on her outdoors."""
-    if weather is None:
+    if weather is None or (indoor and place.window is None):
         return ""
     if indoor:
         return (
@@ -1169,10 +1171,10 @@ class SceneBrief:
         text += f"; {weather}." if weather else "."
         if self.indoor:
             text += " The whole picture stays indoors."
-        if self.place.elmo:
+        if self.place.elmo and not self.indoor:
             text += (
-                " The Elmo is a land vehicle: a colossal armored mobile base on tank "
-                "treads that drives over dry land."
+                " The vehicle is a colossal armored mobile base on tank treads that "
+                "drives over dry land."
             )
         return text
 
