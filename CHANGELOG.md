@@ -14,6 +14,15 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- Story and summary API calls use their own circuit breaker, so a story
+  timeout does not send chat to the CLI.
+- A Grok CLI failure log is the exit code, a stop reason or error class,
+  and the duration. The CLI's own text is not logged.
+- A paid Her POV job is not marked failed while a picture is still in
+  flight. A row that has stopped, and whose picture is gone, still unlocks
+  the next request.
+- The cache probe sends a UUID `x-grok-conv-id`. xAI routes a prompt cache
+  only for a UUID.
 - Her POV story text and episode summaries try the xAI API first
   (`grok-4.7`, low effort, the shared `$3` daily cap). An API failure or a
   reached cap uses the Grok CLI. Extraction, promises, compaction, and the

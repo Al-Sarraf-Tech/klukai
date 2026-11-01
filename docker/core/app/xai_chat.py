@@ -14,6 +14,8 @@ import sqlite3
 import time
 from typing import Any
 
+import uuid
+
 import httpx
 
 from .circuit_breakers import CircuitOpen, get_breaker
@@ -33,6 +35,8 @@ from .xai_spend import (
 # Story and summary JSON share the CLI's background budget. Reasoning tokens
 # count against it, and 2048 was cutting the object off.
 STORY_COMPLETION_TOKENS = 8192
+# Separate from chat so a story timeout cannot send the reply to the CLI.
+STORY_BREAKER = "xai_story"
 
 _MAX_BODY = 2_000_000
 # Set by the chat reply for the whole turn. The websocket stream() signature
@@ -109,6 +113,16 @@ def _event(line: str) -> dict[str, Any] | None:
     if not isinstance(payload, dict):
         raise XaiChatError("xai chat returned malformed JSON")
     return payload
+
+
+def cache_conversation_id(value: object) -> str | None:
+    """xAI sticks a prompt cache only when ``x-grok-conv-id`` is a UUID."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return str(uuid.UUID(value.strip()))
+    except ValueError:
+        return None
 
 
 def message_text(payload: dict[str, Any]) -> str:
@@ -224,10 +238,13 @@ async def iter_text(
         "Authorization": f"Bearer {key}",
         "Accept": "text/event-stream",
     }
-    # Stable per conversation so xAI can route prompt-cache hits.
-    conv = conversation_id if conversation_id else _conversation.get()
-    if isinstance(conv, str) and conv.strip():
-        headers["x-grok-conv-id"] = conv.strip()[:128]
+    # Stable per conversation so xAI can route prompt-cache hits. A label
+    # that is not a UUID is not sent: the router ignores it.
+    conv = cache_conversation_id(
+        conversation_id if conversation_id else _conversation.get()
+    )
+    if conv:
+        headers["x-grok-conv-id"] = conv
     yielded = False
     auth_failed = False
     transport = httpx.AsyncHTTPTransport(retries=0, trust_env=False)
@@ -332,7 +349,7 @@ async def complete_text(
             follow_redirects=False,
             timeout=httpx.Timeout(timeout, connect=5.0),
         ) as client:
-            async with get_breaker("xai_chat").protect():
+            async with get_breaker(STORY_BREAKER).protect():
                 response = await client.post(CHAT_URL, json=body, headers=headers)
                 if response.status_code in {401, 403}:
                     pass

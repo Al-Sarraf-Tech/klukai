@@ -222,6 +222,40 @@ async def test_cloud_pov_stale_job_unlocks_the_next_request(writer):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "held",
+    ["generation", "background", "lock"],
+)
+async def test_cloud_pov_in_flight_picture_is_not_failed(writer, held):
+    """A live paid render is not failed, so the next tap does not buy another."""
+    from app import memory_her_pov as hp
+
+    conn = _RailConn(results=[[("job", "drawing")]])
+    patches = _patch_rail(conn)
+    with (
+        patches[0],
+        patches[1],
+        patches[2],
+        patch(
+            "app.agy_image_provider.generation_in_flight",
+            return_value=held == "generation",
+        ),
+        patch(
+            "app.account_images.background_render_active",
+            return_value=held == "background",
+        ),
+        patch(
+            "app.image_provider.render_lock_held",
+            return_value=held == "lock",
+        ),
+    ):
+        result = await hp._claim_active_from_db("alice")
+    assert result == {"job_id": "job", "status": "drawing", "reused": True}
+    assert conn.calls[0][0].lstrip().startswith("SELECT")
+    assert not any("status = 'failed'" in sql for sql, _ in conn.calls)
+
+
+@pytest.mark.asyncio
 async def test_cloud_pov_worker_claim_has_no_stale_inflight_recovery(writer):
     from app import memory_her_pov as hp
     job_id = "e5628645-bcff-48c2-a8e3-ae016a8d8471"

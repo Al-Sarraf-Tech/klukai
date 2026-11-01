@@ -70,7 +70,9 @@ def chat_model() -> str:
     if not raw or raw == CHAT_MODEL:
         return CHAT_MODEL
     if raw not in DOCUMENTED_CHAT_MODELS:
-        logger.warning("KLUKAI_CHAT_MODEL is not a documented chat model; using grok-4.7")
+        logger.warning(
+            "KLUKAI_CHAT_MODEL is not a documented chat model; using grok-4.7"
+        )
         return CHAT_MODEL
     return raw
 

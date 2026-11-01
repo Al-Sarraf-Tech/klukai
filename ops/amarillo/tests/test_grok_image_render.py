@@ -198,17 +198,28 @@ def test_service_errors_are_failover_eligible(message):
     with pytest.raises(m.agy.ProviderUnavailable): m.provider_error(message)
 
 
-def test_a_cli_failure_log_keeps_the_exit_and_drops_the_secret(caplog):
+def test_a_cli_failure_log_is_the_exit_reason_and_duration(caplog):
     m = module()
     secret = "xai-" + ("k" * 12)
-    detail = f'exit talk stop_reason=max_tokens token={secret} bearer abc.def'
+    detail = f"the prompt and stderr {secret} stop_reason=max_tokens bearer abc.def"
     with caplog.at_level("WARNING"):
-        m._log_cli_failure(3, detail)
+        m._log_cli_failure(3, detail, duration_s=1.5)
     text = caplog.text
     assert "exit=3" in text
-    assert "stop_reason" in text
+    assert "reason=max_tokens" in text
+    assert "duration_s=1.500" in text
     assert secret not in text
     assert "abc.def" not in text
+    assert "stderr" not in text
+    assert "prompt" not in text
+    caplog.clear()
+    m._log_cli_failure(
+        None, f"stop_reason={secret} leftover text", error_class="TimeoutExpired"
+    )
+    assert "reason=TimeoutExpired" in caplog.text
+    assert secret not in caplog.text
+    assert "leftover" not in caplog.text
+    assert "duration_s=-" in caplog.text
 
 
 @pytest.mark.parametrize('message', ['HTTP 403 Forbidden', 'content safety refusal', 'invalid image',

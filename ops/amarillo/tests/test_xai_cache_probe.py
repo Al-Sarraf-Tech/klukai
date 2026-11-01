@@ -1,5 +1,6 @@
 """The cache probe sends real turns and puts the changing note last."""
 import importlib.util
+import uuid
 from pathlib import Path
 
 
@@ -9,6 +10,11 @@ def _probe():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_the_conversation_id_is_a_uuid():
+    probe = _probe()
+    assert uuid.UUID(probe.conversation_id())
 
 
 def test_turn_three_reuses_the_earlier_messages():

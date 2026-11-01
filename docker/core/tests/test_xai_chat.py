@@ -12,9 +12,11 @@ from app.circuit_breakers import State, get_breaker
 from app.llm_completions import LLMCompletionsMixin
 from app.llm_router import FAILURE_SENTINEL, LLMStreamFailed
 from app.xai_chat import (
+    STORY_BREAKER,
     XaiAuthError,
     XaiCapError,
     XaiChatError,
+    cache_conversation_id,
     complete_text,
     content_delta,
     conversation_messages,
@@ -177,16 +179,25 @@ async def test_a_conversation_header_and_api_ticks_set_the_charge(isolated, monk
             },
         },
     )
-    calls = _install(monkeypatch, [httpx.Response(200, text=body)])
+    calls = _install(monkeypatch, [httpx.Response(200, text=body), httpx.Response(200, text=body)])
+    conv = "11111111-1111-4111-8111-111111111111"
     pieces = [
         piece
-        async for piece in iter_text("persona", "hello", conversation_id=" conv-7 ")
+        async for piece in iter_text("persona", "hello", conversation_id=f" {conv} ")
     ]
     assert pieces == ["Hi", " there"]
-    assert calls[0].headers["x-grok-conv-id"] == "conv-7"
+    assert calls[0].headers["x-grok-conv-id"] == conv
     from app import xai_spend
 
     assert xai_spend.spent_today() == pytest.approx(0.5)
+    pieces = [
+        piece
+        async for piece in iter_text("persona", "hello", conversation_id="conv-7")
+    ]
+    assert pieces == ["Hi", " there"]
+    assert "x-grok-conv-id" not in calls[1].headers
+    assert cache_conversation_id("conv-7") is None
+    assert cache_conversation_id(conv) == conv
 
 
 async def test_a_streamed_reply_closes_a_half_open_breaker(isolated, monkeypatch):
@@ -514,18 +525,21 @@ async def test_story_auth_failure_does_not_open_the_breaker(isolated, monkeypatc
     _install(monkeypatch, [httpx.Response(401)])
     with pytest.raises(XaiAuthError):
         await complete_text("s", "p")
+    assert get_breaker(STORY_BREAKER).state is State.CLOSED
     assert get_breaker("xai_chat").state is State.CLOSED
 
 
-async def test_story_server_errors_open_the_breaker(isolated, monkeypatch):
-    calls = _install(monkeypatch, [httpx.Response(502) for _ in range(5)])
+async def test_story_server_errors_open_the_story_breaker_only(isolated, monkeypatch):
+    calls = _install(monkeypatch, [httpx.Response(502) for _ in range(5)] + [_ok()])
     for _ in range(5):
         with pytest.raises(XaiChatError, match="failed"):
             await complete_text("s", "p")
-    assert get_breaker("xai_chat").state is State.OPEN
+    assert get_breaker(STORY_BREAKER).state is State.OPEN
+    assert get_breaker("xai_chat").state is State.CLOSED
     with pytest.raises(XaiChatError, match="unavailable"):
         await complete_text("s", "p")
-    assert len(calls) == 5
+    assert [piece async for piece in iter_text("persona", "hello")] == ["Hi", " there"]
+    assert len(calls) == 6
 
 
 async def test_a_blank_story_is_still_charged(isolated, monkeypatch):
