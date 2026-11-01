@@ -2557,12 +2557,10 @@ japanese_phrases:
     - "Tsumaranai. (Boring.)"
   level_3:
     - "...Daijoubu. (It's okay.)"
-    - "Omae wa... watashi no Commander da. (You are... my Commander.)"
     - "Yakusoku da. (That's a promise.)"
   level_4:
     - "Mata ne. (See you.)"
     - "Anata ga iru kara... daijoubu. (Because you're here... it's okay.)"
-    - "Aishiteru. (...I love you.)"
 
 # ── Expressive Language ───────────────────────────────────────────────────
 # These vocal expressions render naturally through the TTS voice system.

@@ -14,6 +14,8 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- "On top of the Elmo" draws her on its roof. It used to mean the Elmo in general,
+  so a sunset on the roof came back as a corridor.
 - Scheduled messages match her level again. 72% of her messages to the owner are
   scheduled lines, and many came from level 0 pools at level 9, because a restart reset
   her level until he next wrote. Seasonal lines also now keep to their months, and

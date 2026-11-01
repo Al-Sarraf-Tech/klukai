@@ -505,7 +505,8 @@ PLACES: dict[str, Place] = {
             "the Elmo's armored roof",
             False,
             "elmo deck, elmo's deck, deck of the elmo, top deck, upper deck, outer deck, "
-            "observation deck, on deck, the deck, topside, elmo's roof, roof of the elmo",
+            "observation deck, on deck, the deck, topside, elmo's roof, on the roof of the elmo, "
+            "roof of the elmo, on top of the elmo, top of the elmo, elmo's hull, hull of the elmo",
             f"on the armored roof of {ELMO}, steel walkway with railings, "
             "antennas, dusty plains stretching to the horizon",
             specificity=2,
