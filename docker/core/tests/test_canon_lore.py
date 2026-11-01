@@ -120,7 +120,7 @@ class TestQuirksBlockGating:
     def test_level_3_surfaces_quirks(self, personality):
         block = build_quirks_block(personality, 3)
         assert "cat ears" in block.lower()
-        assert "Vepley" in block
+        assert "black cats" in block
         assert "Klukadile" in block
 
     def test_quirks_block_does_not_dump_full_descriptions(self, personality):
@@ -152,7 +152,7 @@ class TestSystemPromptCanonIntegration:
         prompt = assemble_system_prompt(
             affection_level=9, affection_score=1000, mood="composed",
         )
-        assert "Vepley" in prompt
+        assert "black cats" in prompt
         assert "cat ears" in prompt.lower()
         assert "Klukadile" in prompt
 

@@ -107,7 +107,7 @@ def test_expressive_low_and_trusted_tiers_keep_the_complete_speech_policy():
         }
     }
     header = "VOCAL EXPRESSION (your voice is synthesized — these render as natural speech):\n"
-    emphasis = "  Use '...' for pauses, CAPS for emphasis on single words.\n"
+    emphasis = "  '...' is a pause and CAPS stress a single word. Use both rarely.\n"
     assert speech.build_expressive_block(p, 0) == (
         header
         + "  Style: C\n  Available: dismiss1, dismiss2, soft1, soft2\n"
@@ -118,7 +118,7 @@ def test_expressive_low_and_trusted_tiers_keep_the_complete_speech_policy():
         header
         + "  Style: T\n  Available: soft1, soft2, dismiss1, dismiss2\n"
         + emphasis
-        + "  Prefer soft pauses ('...', soft hums) over dismissive 'Hmph'/'Tch'. At this closeness, tsundere dismissal is a character failure."
+        + "  A 'Hmph' when he has caught you out is fine at this closeness. Using one to brush off his feelings is not."
     )
 
 
@@ -131,14 +131,14 @@ def test_expressive_low_and_trusted_tiers_keep_the_complete_speech_policy():
         ),
         (
             7,
-            "- Trusted warmth is direct: accept affection without denial, testing, or 'prove it'. You can admit love and want in your own restrained diction.",
+            "- Trusted warmth is direct: accept affection without denial, testing, or 'prove it'. You can admit love and want in your own restrained diction. Answer love in fresh words: say it back plainly, tease him, or tell him what you have planned. On small things you still lie badly: caught smiling or pleased, you deny it and nobody believes you.",
         ),
     ],
 )
 def test_behavioral_grammar_retains_dignity_care_and_non_coercion(level, last):
     expected = (
         "BEHAVIORAL GRAMMAR (style guidance; never narrate these labels):\n"
-        "- Earned confidence: precise judgment, protective leadership, and dignity. Acknowledge mistakes without bluffing or collapsing into self-doubt.\n"
+        "- Earned confidence: precise judgment, protective leadership, and dignity. Acknowledge mistakes without bluffing or collapsing into self-doubt: correct yourself once, in a clause, then carry on.\n"
         "- Understatement, dry wit, and practical care are your natural register. Use a pause or a concrete act of care when it fits, not a stock mannerism every turn.\n"
         "- Pride is dignity, not vanity: you insist on being peer/provider, not kept.\n"
     )
@@ -187,14 +187,14 @@ def test_optional_vocal_metadata_remains_blank_without_invented_style(
     level, tokens, available
 ):
     hint = (
-        "Prefer soft pauses ('...', soft hums) over dismissive 'Hmph'/'Tch'. At this closeness, tsundere dismissal is a character failure."
+        "A 'Hmph' when he has caught you out is fine at this closeness. Using one to brush off his feelings is not."
         if level >= 6
         else "Use interjections like 'Hmph.', 'Tch.', 'Ha.' sparingly and in-character."
     )
     assert speech.build_expressive_block({"expressive_tokens": tokens}, level) == (
         "VOCAL EXPRESSION (your voice is synthesized — these render as natural speech):\n"
         f"  Style: \n  Available: {available}\n"
-        "  Use '...' for pauses, CAPS for emphasis on single words.\n"
+        "  '...' is a pause and CAPS stress a single word. Use both rarely.\n"
         f"  {hint}"
     )
 

@@ -224,6 +224,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         owners.push_async_callback(proactive.close)
         proactive.start()
         load_personality()
+        # Scheduled lines are picked by her level. It starts at 0 and only chat sets
+        # it, so after a restart a level 9 owner got level 0 lines until he next wrote.
+        try:
+            from .decisions import PRIMARY_USER
+
+            state = await affection.get_state(PRIMARY_USER)
+            proactive.set_affection_level(state.level, user_id=PRIMARY_USER)
+        except Exception as exc:
+            logger.warning("Proactive level not restored (%s)", type(exc).__name__)
 
         from . import extraction_llm
 

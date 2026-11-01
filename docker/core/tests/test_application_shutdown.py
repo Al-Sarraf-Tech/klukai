@@ -404,3 +404,22 @@ async def test_failed_owner_does_not_skip_other_finalizers_or_close_database_ear
         with pytest.raises(ExceptionGroup, match="shutdown failed"):
             await closing
     assert observed == [False] and state["database_closed"]
+
+
+@pytest.mark.asyncio
+async def test_startup_restores_her_level_for_scheduled_lines(application, monkeypatch):
+    """Scheduled lines are chosen by level; a restart must not drop her to level 0."""
+    monkeypatch.setattr(
+        main.affection, "get_state", AsyncMock(return_value=SimpleNamespace(level=9)), raising=False
+    )
+    async with main.lifespan(main.app):
+        main.proactive.set_affection_level.assert_called_once_with(9, user_id="jalsarraf")
+
+
+@pytest.mark.asyncio
+async def test_startup_survives_a_failed_level_lookup(application, monkeypatch):
+    monkeypatch.setattr(
+        main.affection, "get_state", AsyncMock(side_effect=RuntimeError("db")), raising=False
+    )
+    async with main.lifespan(main.app):
+        main.proactive.set_affection_level.assert_not_called()

@@ -14,6 +14,20 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- Scheduled messages match her level again. 72% of her messages to the owner are
+  scheduled lines, and many came from level 0 pools at level 9, because a restart reset
+  her level until he next wrote. Seasonal lines also now keep to their months, and
+  weather lines no longer name an hour.
+- Her personality follows canon and stops reciting her prompt. She is bossy because
+  she has done the work, deadpan, a bad liar about small things and direct about what
+  matters. She is a partner rather than a subordinate, and she knows Mechty, Belka, Leva,
+  her black cats and how the vodka story really went. Her own tastes are hers, while facts
+  about him still come only from what she was given. The examples she was copying are
+  gone ("...I know", "I chose you, every day"), and each turn shows her how her recent
+  replies opened. Comparing old and new prompts on 18 fictional messages on Haiku at xhigh,
+  replies opening with "..." fell from 39% to 0% and questions rose from 28% to 44%.
+  Replies got longer: median 89 to 179 characters, 3.4 s to 4.3 s. Intimacy text and its
+  gating are unchanged.
 - Nothing intimate is ever drawn with another character. Squad entries, some describing
   petite characters, could share a picture with lingerie, bed or kiss tags, because
   those tags never checked who else was in it. A request naming a squad character beside

@@ -98,7 +98,7 @@ MOOD_SPECIFIC_BLEED: dict[str, str] = {
     "protective": "Voice drops lower. Terse commands. Body positioned between danger and those she shields.",
     "quietly_pleased": "Trying to suppress a smile. Shorter responses. Deflects if noticed.",
     "competitive": "Faster pace. Sharper wit. Slight lean forward. Challenge only during willing banter; soften for distress.",
-    "tender": "Voice softens dramatically. Longer pauses. Sentences trail into ellipses. Guard fully down.",
+    "tender": "Voice softens. Plain, unhurried words. Guard fully down.",
     "longing": "Wistful pauses. Gaze drifts. References shared memories. Sentences hang unfinished.",
     "battle_ready": "Radio-crisp. No contractions. Short bursts. Weapon-check cadence.",
     "flustered": "Stammering. False starts. Looks away. Sentences cut short or redirected.",
@@ -167,7 +167,7 @@ CATEGORY_BLEED_RULES: dict[str, str] = {
     ),
     "romantic": (
         "MOOD BLEED — EMOTIONAL: Your guard is lowered. The military mask slips. "
-        "Speech patterns soften — more ellipses, trailing thoughts, physical closeness. "
+        "Your speech softens and slows, and you stay physically close. "
         "You may touch, reach, lean in. Words come harder because feelings are real. "
         "The contrast between your usual composure and this vulnerability IS the emotion."
     ),
@@ -284,7 +284,7 @@ def build_context_block(
             months = days_together // 30
             date_line += f" {months} months together. You may reference this warmly at high affection."
         else:
-            date_line += " You may naturally reference how long you've been together."
+            date_line += " This counts days in this app only; you have known him far longer. Mention it only if he asks."
 
     return (
         f"OPERATIONAL CONTEXT: {mil_time} hours, {day_name} — {time_period} "

@@ -148,6 +148,8 @@ def _select_lore_message(
         if not isinstance(config, dict):
             continue
         min_aff = config.get("min_affection", 0)
+        if config.get("months") and now_local().month not in config["months"]:
+            continue
         if level >= min_aff:
             weight = config.get("weight", 10)
             messages = config.get("messages", [])

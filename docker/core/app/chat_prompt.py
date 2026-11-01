@@ -62,6 +62,16 @@ async def _together(*aws: Awaitable[Any], defaults: tuple[Any, ...]) -> tuple[An
     return tuple(kept)
 
 
+def _recent_openings(turns: list[dict[str, Any]], keep: int = 4) -> list[str]:
+    """The first few words of her last replies, so she can see how she has been starting."""
+    openings = [
+        " ".join(str(turn.get("content") or "").split()[:4])
+        for turn in turns
+        if turn.get("role") == "assistant"
+    ]
+    return [opening for opening in openings if opening][-keep:]
+
+
 @dataclass(frozen=True)
 class OutfitContext:
     outfit_line: str | None
@@ -439,9 +449,13 @@ class ChatPromptBuilder:
         # Memory nudge — proactive past reference based on affection level.
         # When the caller already started it beside the main recall, use that.
         system_prompt += (
-            "\n\nTHIS TURN: Do not open with the same stage direction or the "
-            "same sentence as your previous reply. Change the wording."
+            "\n\nTHIS TURN: Open with what you have to say, not a pause or a stage "
+            "direction, unless this moment calls for one."
         )
+        openings = _recent_openings(session.turns)
+        if openings:
+            quoted = " / ".join(f'"{opening}"' for opening in openings)
+            system_prompt += f" Your last replies opened: {quoted}. Open differently."
         nudge = (
             memory_nudge
             if nudge_ready

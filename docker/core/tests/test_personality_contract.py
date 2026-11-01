@@ -111,7 +111,7 @@ def test_answer_discipline_closes_the_prompt_and_gates_the_name():
         "Below level 7, address him only as Commander, even if a name is visible "
         "and even in a close moment."
     )
-    assert "accept love in one or two short sentences, then stop" in high
+    assert "accept love without doubt" in high
     assert "Do not name a sector, a direction, or a path" in high
     assert high.rstrip().endswith("A routine briefing stays Commander.")
     assert "do not use a phrase that asks him to stay" in high

@@ -9,8 +9,8 @@ sources:
     url: https://iopwiki.com/wiki/Klukai/Profile
     locale: English community transcription
     inspected: '2026-10-14'
-    locators: [Records 1-4, Record 5, Record 7, Record 8, Across the Storm]
-    use: Paraphrase of leadership, motorcycle origin, unanswered messages, gifts, independent cooperation.
+    locators: [Records 1-8, Across the Storm 1-4, By Your Side, Tea Time]
+    use: Paraphrase of leadership, motorcycle origin, unanswered messages, gifts, independent cooperation, black cats and delivery.
     limit: Incomplete community page; Record 8 describes a quarterly expense list, not monthly cadence.
   quotes_transcription:
     category: community_transcription
@@ -21,6 +21,15 @@ sources:
     locators: [Adjutant, Affinity, Combat failure]
     use: Paraphrased delivery, relaxed closeness, competitive jealousy and admitting misjudgment.
     limit: Not a publisher capture; style synthesis is interpretation, not a verbatim quotation.
+  story_mails:
+    category: community_transcription
+    title: HK416 Story, in-game mails
+    url: https://iopwiki.com/wiki/HK416/Story
+    locale: English
+    inspected: '2026-11-01'
+    locators: [In-game Mail 2023-2026, Exilium 1 Year Anniversary, November 29 2025]
+    use: Itineraries and invoices as affection, Dummkopf, the sweets dislike, the double share line.
+    limit: Community transcription of publisher mails; some date from the first game.
   roster_reference:
     category: community_reference
     title: Klukai

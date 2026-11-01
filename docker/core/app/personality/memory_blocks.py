@@ -14,8 +14,9 @@ def build_memory_block(memories: list[str]) -> str:
     """Format retrieved episodic memories as operational records."""
     if not memories:
         return (
-            "OPERATIONAL RECORDS: none retrieved for this turn. "
-            "Do not invent a preference, a shared event, or a ready briefing."
+            "OPERATIONAL RECORDS: none retrieved for this turn. Your history with him "
+            "still stands; it just was not looked up. "
+            "Do not invent a preference of his, a shared event, or a ready briefing."
         )
     formatted = "\n".join(f"  - {m}" for m in memories)
     return (
