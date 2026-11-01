@@ -141,13 +141,23 @@ class ChatPromptBuilder:
             ),
         )
         (episode_memories, rel_facts, recalled_exchanges), nudge = recalled_pair
-        recent_replies = [
-            str(turn.get("content") or "")
-            for turn in session.turns
-            if turn.get("role") == "assistant"
-        ][-3:]
-        from .personality.memory_blocks import drop_repeated_replies
+        from .conversation_continuity import (
+            load_recent_assistant_replies,
+            merge_recent_replies,
+        )
+        from .personality.memory_blocks import (
+            drop_repeated_memories,
+            drop_repeated_replies,
+        )
 
+        session_replies = [
+            str(turn.get("content") or "")
+            for turn in reversed(session.turns)
+            if turn.get("role") == "assistant"
+        ]
+        stored_replies = await load_recent_assistant_replies(user_id, 20)
+        recent_replies = merge_recent_replies(session_replies, stored_replies, limit=20)
+        episode_memories = drop_repeated_memories(episode_memories, recent_replies)
         recalled_exchanges = drop_repeated_replies(recalled_exchanges, recent_replies)
         phys_state, phys_detail = physical_state
 
@@ -185,10 +195,17 @@ class ChatPromptBuilder:
             current_location=location_line,
         )
 
-        system_prompt = await self.presence(assembled, aff_state, user_id)
-
-        system_prompt = await self.append_blocks(
-            system_prompt,
+        # The persona string from assembly is the cache prefix. Presence and
+        # the per-turn blocks are appended only to the tail, never onto it.
+        stable = getattr(assembled, "stable", "") or ""
+        full = str(assembled)
+        if stable and full.startswith(stable):
+            tail = full[len(stable) :].lstrip("\n")
+        else:
+            tail = full
+        tail = await self.presence(tail, aff_state, user_id)
+        tail = await self.append_blocks(
+            tail,
             content,
             session,
             user_id,
@@ -200,13 +217,13 @@ class ChatPromptBuilder:
             memory_nudge=nudge,
             nudge_ready=not skip_recall,
         )
-        stable = getattr(assembled, "stable", "")
-        text = str(system_prompt)
-        if stable and text.startswith(stable):
-            from .personality.system_prompt import PromptText
+        tail = str(tail).lstrip("\n")
+        if not stable:
+            return tail
+        from .personality.system_prompt import PromptText
 
-            return PromptText(text, stable)
-        return text
+        text = f"{stable}\n\n{tail}" if tail else stable
+        return PromptText(text, stable)
 
     async def recall(
         self, content: str, skip_recall: bool, level: int, user_id: str

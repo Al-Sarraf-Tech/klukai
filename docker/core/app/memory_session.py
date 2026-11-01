@@ -109,8 +109,9 @@ class RedisSessionMixin:
             raise SessionUnavailable("Stored session is invalid") from e
 
     async def save_session(self, session_id: str, state: SessionState) -> None:
-        if len(state.turns) > MAX_SESSION_TURNS:
-            state.turns = state.turns[-MAX_SESSION_TURNS:]
+        from .conversation_continuity import cached_history
+
+        state.turns = cached_history(state.turns, limit=MAX_SESSION_TURNS)
         state.last_activity = datetime.now()
         if self._redis is None:
             raise SessionUnavailable("Session persistence not initialized")

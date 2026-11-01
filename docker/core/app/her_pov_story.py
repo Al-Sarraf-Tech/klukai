@@ -179,7 +179,9 @@ async def compose_pov(
         import json
 
         content = await complete_creative_text(
-            "Return only the requested memory JSON.", prompt
+            "Return only the requested memory JSON.",
+            prompt,
+            caller="her_pov",
         )
         try:
             raw = json.loads(content)
@@ -189,7 +191,7 @@ async def compose_pov(
     else:
         from . import background_llm
 
-        # Never raises: Haiku, else the defaults.
+        # Never raises: the API, the CLI, or the defaults below.
         raw = await background_llm.json_object("her_pov", prompt, max_tokens=512) or {}
 
     if not isinstance(raw, dict):

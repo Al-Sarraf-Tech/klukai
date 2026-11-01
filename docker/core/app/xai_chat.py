@@ -14,6 +14,8 @@ import sqlite3
 import time
 from typing import Any
 
+import uuid
+
 import httpx
 
 from .circuit_breakers import CircuitOpen, get_breaker
@@ -22,12 +24,19 @@ from .xai_spend import (
     CHAT_URL,
     api_key,
     capped,
+    chat_model,
     chat_usd,
     log_use,
     record,
     redact,
     ticks_usd,
 )
+
+# Story and summary JSON share the CLI's background budget. Reasoning tokens
+# count against it, and 2048 was cutting the object off.
+STORY_COMPLETION_TOKENS = 8192
+# Separate from chat so a story timeout cannot send the reply to the CLI.
+STORY_BREAKER = "xai_story"
 
 _MAX_BODY = 2_000_000
 # Set by the chat reply for the whole turn. The websocket stream() signature
@@ -106,6 +115,61 @@ def _event(line: str) -> dict[str, Any] | None:
     return payload
 
 
+def cache_conversation_id(value: object) -> str | None:
+    """xAI sticks a prompt cache only when ``x-grok-conv-id`` is a UUID."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return str(uuid.UUID(value.strip()))
+    except ValueError:
+        return None
+
+
+def message_text(payload: dict[str, Any]) -> str:
+    """Visible text of a non-streaming chat completion. Reasoning is not included."""
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return ""
+    message = choices[0].get("message")
+    if not isinstance(message, dict):
+        return ""
+    text = message.get("content")
+    if not isinstance(text, str):
+        return ""
+    return text.strip()
+
+
+def _settle(
+    model: str,
+    counts: tuple[int, int, int, int] | None,
+    billed: float | None,
+    started: float,
+    first: float | None,
+) -> None:
+    usd = 0.0
+    daily: float | None = None
+    input_tokens = cached = output = reasoning = None
+    if counts is not None:
+        input_tokens, cached, output, reasoning = counts
+        usd = chat_usd(input_tokens, cached, output) if billed is None else billed
+        try:
+            daily = record("chat", usd)
+        except (OSError, sqlite3.Error):
+            daily = None
+    log_use(
+        "chat",
+        model=model,
+        input_tokens=input_tokens,
+        cached_tokens=cached,
+        output_tokens=output,
+        reasoning_tokens=reasoning,
+        ttft_s=None if first is None else first - started,
+        total_s=time.monotonic() - started,
+        usd=usd,
+        daily_usd=daily,
+    )
+
+
 def conversation_messages(
     persona: str,
     turns: list[dict[str, str]],
@@ -158,8 +222,9 @@ async def iter_text(
         raise XaiCapError("xai daily cap reached")
     history = turns if turns is not None else [{"role": "user", "content": prompt}]
     messages = conversation_messages(system, history, volatile)
+    model = chat_model()
     body = {
-        "model": CHAT_MODEL,
+        "model": model,
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
@@ -173,10 +238,13 @@ async def iter_text(
         "Authorization": f"Bearer {key}",
         "Accept": "text/event-stream",
     }
-    # Stable per conversation so xAI can route prompt-cache hits.
-    conv = conversation_id if conversation_id else _conversation.get()
-    if isinstance(conv, str) and conv.strip():
-        headers["x-grok-conv-id"] = conv.strip()[:128]
+    # Stable per conversation so xAI can route prompt-cache hits. A label
+    # that is not a UUID is not sent: the router ignores it.
+    conv = cache_conversation_id(
+        conversation_id if conversation_id else _conversation.get()
+    )
+    if conv:
+        headers["x-grok-conv-id"] = conv
     yielded = False
     auth_failed = False
     transport = httpx.AsyncHTTPTransport(retries=0, trust_env=False)
@@ -237,25 +305,87 @@ async def iter_text(
         ) from exc
     if not yielded:
         raise XaiChatError("xai chat returned no text")
-    usd = 0.0
-    daily: float | None = None
-    input_tokens = cached = output = reasoning = None
-    if counts is not None:
-        input_tokens, cached, output, reasoning = counts
-        usd = chat_usd(input_tokens, cached, output) if billed is None else billed
-        try:
-            daily = record("chat", usd)
-        except (OSError, sqlite3.Error):
-            daily = None
-    log_use(
-        "chat",
-        model=CHAT_MODEL,
-        input_tokens=input_tokens,
-        cached_tokens=cached,
-        output_tokens=output,
-        reasoning_tokens=reasoning,
-        ttft_s=None if first is None else first - started,
-        total_s=time.monotonic() - started,
-        usd=usd,
-        daily_usd=daily,
-    )
+    _settle(model, counts, billed, started, first)
+
+
+async def complete_text(
+    system: str,
+    prompt: str,
+    *,
+    max_tokens: int = STORY_COMPLETION_TOKENS,
+    timeout: float = 120.0,
+) -> str:
+    """One grok-4.7 completion for a background story or summary.
+
+    Raises before any request when the key is missing or the daily cap is
+    already spent, so the caller can use the Grok CLI. The chat-model trial
+    does not apply here: these calls stay on ``CHAT_MODEL``.
+    """
+    key = api_key()
+    if not key:
+        raise XaiChatError("xai chat is not configured")
+    if capped():
+        raise XaiCapError("xai daily cap reached")
+    if type(max_tokens) is not int or not 1 <= max_tokens <= 8192:
+        raise XaiChatError("xai chat token budget is invalid")
+    body = {
+        "model": CHAT_MODEL,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
+        ],
+        "stream": False,
+        "reasoning_effort": "low",
+        "max_completion_tokens": max_tokens,
+    }
+    started = time.monotonic()
+    headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
+    transport = httpx.AsyncHTTPTransport(retries=0, trust_env=False)
+    payload: dict[str, Any] | None = None
+    try:
+        async with httpx.AsyncClient(
+            transport=transport,
+            trust_env=False,
+            follow_redirects=False,
+            timeout=httpx.Timeout(timeout, connect=5.0),
+        ) as client:
+            async with get_breaker(STORY_BREAKER).protect():
+                response = await client.post(CHAT_URL, json=body, headers=headers)
+                if response.status_code in {401, 403}:
+                    pass
+                elif response.status_code != 200:
+                    raise XaiChatError("xai chat failed")
+                else:
+                    raw = response.content
+                    if len(raw) > _MAX_BODY:
+                        raise XaiChatError("xai chat response is too large")
+                    try:
+                        parsed = json.loads(raw)
+                    except ValueError as exc:
+                        raise XaiChatError("xai chat returned malformed JSON") from exc
+                    if not isinstance(parsed, dict) or parsed.get("error"):
+                        raise XaiChatError("xai chat returned malformed JSON")
+                    payload = parsed
+    except XaiChatError:
+        raise
+    except CircuitOpen as exc:
+        raise XaiChatError("xai chat is unavailable") from exc
+    except (OSError, httpx.HTTPError, TimeoutError) as exc:
+        raise XaiChatError(
+            redact(f"xai chat is unavailable: {type(exc).__name__}")
+        ) from exc
+    if payload is None:
+        raise XaiAuthError("xai chat was not authorized")
+    counts = usage_counts(payload)
+    billed: float | None = None
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        exact = ticks_usd(usage.get("cost_in_usd_ticks"))
+        if exact is not None:
+            billed = exact
+    text = message_text(payload)
+    if not text:
+        _settle(CHAT_MODEL, counts, billed, started, None)
+        raise XaiChatError("xai chat returned no text")
+    _settle(CHAT_MODEL, counts, billed, started, None)
+    return text

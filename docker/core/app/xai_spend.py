@@ -20,6 +20,23 @@ from collections.abc import Iterator
 logger = logging.getLogger(__name__)
 
 CHAT_MODEL = "grok-4.7"
+# Text models on https://docs.x.ai/developers/models as of 2026-10-31.
+# Grok 4.7 Fast is the same model on faster infrastructure, and the docs
+# say it is not on the public API. Image and voice slugs are not chat.
+DOCUMENTED_CHAT_MODELS = frozenset(
+    {
+        "grok-4.7",
+        "grok-4.6",
+        "grok-4.5",
+        "grok-4.3",
+        "grok-4.20-0309-reasoning",
+        "grok-4.20-0309-non-reasoning",
+        "grok-build-0.1",
+        "grok-4.20-multi-agent-0309",
+    }
+)
+# The documented non-reasoning chat slug. There is no public fast slug.
+FASTER_CHAT_CANDIDATE = "grok-4.20-0309-non-reasoning"
 IMAGE_MODEL = "grok-imagine-image-2.0"
 CHAT_URL = "https://api.x.ai/v1/chat/completions"
 IMAGE_EDIT_URL = "https://api.x.ai/v1/images/edits"
@@ -42,6 +59,22 @@ def _choice(name: str) -> str:
     if raw in {"api", "cli"}:
         return raw
     return "api" if api_key() else "cli"
+
+
+def chat_model() -> str:
+    """Chat model from ``KLUKAI_CHAT_MODEL``. Unknown slugs stay on grok-4.7.
+
+    Story and summary calls do not use this. They stay on ``CHAT_MODEL``.
+    """
+    raw = os.environ.get("KLUKAI_CHAT_MODEL", "").strip()
+    if not raw or raw == CHAT_MODEL:
+        return CHAT_MODEL
+    if raw not in DOCUMENTED_CHAT_MODELS:
+        logger.warning(
+            "KLUKAI_CHAT_MODEL is not a documented chat model; using grok-4.7"
+        )
+        return CHAT_MODEL
+    return raw
 
 
 def chat_backend() -> str:
@@ -103,12 +136,12 @@ def ticks_usd(ticks: object) -> float | None:
 
 
 def daily_cap() -> float:
-    raw = os.environ.get("KLUKAI_API_DAILY_USD_CAP", "3").strip()
+    raw = os.environ.get("KLUKAI_API_DAILY_USD_CAP", "5").strip()
     try:
         value = float(raw)
     except ValueError:
-        return 3.0
-    return value if value >= 0 else 3.0
+        return 5.0
+    return value if value >= 0 else 5.0
 
 
 def ledger_path() -> Path:

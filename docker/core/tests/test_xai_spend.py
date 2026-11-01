@@ -65,7 +65,7 @@ def test_invalid_rates_and_cap_fall_back_to_the_defaults(ledger, monkeypatch):
     assert spend.image_usd() == 0.09
     assert spend.ticks_usd(37756000) == pytest.approx(0.0037756)
     assert spend.ticks_usd(True) is None
-    assert spend.daily_cap() == 3.0
+    assert spend.daily_cap() == 5.0
     monkeypatch.setenv("KLUKAI_API_DAILY_USD_CAP", "1.5")
     assert spend.daily_cap() == 1.5
 
@@ -96,11 +96,45 @@ def test_redact_without_a_key_still_hides_key_shaped_tokens(ledger):
     assert token not in spend.redact(f"saw {token}")
 
 
-def test_a_cap_that_is_not_a_number_stays_at_three_dollars(ledger, monkeypatch):
+def test_a_cap_that_is_not_a_number_stays_at_five_dollars(ledger, monkeypatch):
     monkeypatch.setenv("KLUKAI_API_DAILY_USD_CAP", "nope")
-    assert spend.daily_cap() == 3.0
+    assert spend.daily_cap() == 5.0
 
 
 def test_the_default_ledger_lives_under_the_home_share(ledger, monkeypatch):
     monkeypatch.delenv("KLUKAI_XAI_LEDGER")
     assert spend.ledger_path().name == "xai-spend.sqlite3"
+
+
+def test_chat_model_defaults_to_grok_4_7(ledger):
+    assert spend.chat_model() == "grok-4.7"
+    assert "grok-4.7-fast" not in spend.DOCUMENTED_CHAT_MODELS
+    assert spend.FASTER_CHAT_CANDIDATE in spend.DOCUMENTED_CHAT_MODELS
+
+
+def test_a_documented_chat_model_can_be_selected(ledger, monkeypatch):
+    monkeypatch.setenv("KLUKAI_CHAT_MODEL", spend.FASTER_CHAT_CANDIDATE)
+    assert spend.chat_model() == spend.FASTER_CHAT_CANDIDATE
+
+
+def test_an_unknown_chat_model_stays_on_grok_4_7(ledger, monkeypatch, caplog):
+    monkeypatch.setenv("KLUKAI_CHAT_MODEL", "not-a-chat-model")
+    caplog.set_level("WARNING")
+    assert spend.chat_model() == "grok-4.7"
+    assert "not-a-chat-model" not in caplog.text
+    assert "not a documented chat model" in caplog.text
+
+
+def test_the_benchmark_uses_only_documented_chat_models():
+    import importlib.util
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "ops/amarillo/scripts/klukai-xai-chat-benchmark.py"
+    )
+    spec = importlib.util.spec_from_file_location("klukai_xai_chat_benchmark", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert set(module.DOCUMENTED) == set(spend.DOCUMENTED_CHAT_MODELS)
+    assert module.DEFAULT_MODELS == ("grok-4.7", spend.FASTER_CHAT_CANDIDATE)

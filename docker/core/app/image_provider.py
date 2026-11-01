@@ -42,6 +42,11 @@ _cloud_render_lock = asyncio.Semaphore(1)
 _reference_lock = threading.Lock()
 
 
+def render_lock_held() -> bool:
+    """True while this process holds the single cloud-edit slot."""
+    return _cloud_render_lock.locked()
+
+
 class ImageProviderError(ValueError):
     """A credential- and prompt-free image validation failure."""
 

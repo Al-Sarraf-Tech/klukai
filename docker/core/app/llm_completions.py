@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from typing import Any
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -122,12 +123,26 @@ class LLMCompletionsMixin(ABC):
                 turns.append({"role": role, "content": text_line.strip()})
             lines.append(f"{role or 'user'}: {text_line}")
         prompt = "\n".join(lines).strip() or "."
-        stable = getattr(system_prompt, "stable", "")
+        stable = getattr(system_prompt, "stable", "") or ""
         full = str(system_prompt)
-        if isinstance(stable, str) and stable and full.startswith(stable):
-            persona, turn_state = stable, full[len(stable) :].lstrip("\n")
+        if isinstance(stable, str) and stable:
+            # The persona is sent on its own even if a later edit stopped it
+            # being a textual prefix of the whole prompt.
+            if full.startswith(stable):
+                persona, turn_state = stable, full[len(stable) :].lstrip("\n")
+            else:
+                persona, turn_state = stable, full
         else:
             persona, turn_state = full, ""
+        history_prefix = "\n".join(
+            f"{turn['role']}\n{turn['content']}" for turn in turns
+        )
+        logger.info(
+            "chat cache sha system=%s history=%s turns=%d",
+            hashlib.sha256(persona.encode()).hexdigest()[:16],
+            hashlib.sha256(history_prefix.encode()).hexdigest()[:16],
+            len(turns),
+        )
         if notes:
             turn_state = "\n\n".join([*notes, turn_state] if turn_state else notes)
         if chat_backend() == "api" and api_key():

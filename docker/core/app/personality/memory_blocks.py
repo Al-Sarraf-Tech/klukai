@@ -59,6 +59,28 @@ def repeats_recent_reply(candidate: str, recent: list[str]) -> bool:
     return False
 
 
+def memory_text(item: object) -> str:
+    """The reply-like text inside a recalled memory, if it has one."""
+    if isinstance(item, str):
+        return item
+    if isinstance(item, dict):
+        for key in ("summary", "content", "assistant_content", "text"):
+            value = item.get(key)
+            if isinstance(value, str):
+                return value
+    return ""
+
+
+def drop_repeated_memories(memories: list[Any], recent_replies: list[str]) -> list[Any]:
+    """Leave out memories that retell a reply she already gave."""
+    kept = []
+    for item in memories:
+        if repeats_recent_reply(memory_text(item), recent_replies):
+            continue
+        kept.append(item)
+    return kept
+
+
 def drop_repeated_replies(
     exchanges: list[dict[str, Any]], recent_replies: list[str]
 ) -> list[dict[str, Any]]:

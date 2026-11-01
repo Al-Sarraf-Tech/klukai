@@ -119,6 +119,23 @@ async def run_her_pov(user_id: str, job_id: str) -> None:
     await pipeline.run(user_id, job_id)
 
 
+def _paid_picture_in_flight() -> bool:
+    """True when a paid picture is still running, so a stale row must stay.
+
+    Failing it and starting another would buy a second image. The time window
+    still unlocks a row once this process no longer holds the picture.
+    """
+    if not _cloud_generation_enabled():
+        return False
+    from .account_images import background_render_active
+    from .agy_image_provider import generation_in_flight
+    from .image_provider import render_lock_held
+
+    return bool(
+        generation_in_flight() or background_render_active() or render_lock_held()
+    )
+
+
 def _execution_mode() -> str:
     """inline (default, unit tests) or queue (production durable rail)."""
     return (os.environ.get("HER_POV_EXECUTION") or "inline").strip().lower()
@@ -149,7 +166,8 @@ async def _enqueue_job(job_id: str) -> bool:
 # A job that has not moved in this long is not running anywhere: every phase
 # bumps updated_at, and the longest phase (drawing) is bounded by the image
 # lock, the LM gate, the lease acquire deadline, one bounded wait for a picture
-# already in flight (410 s) and the 380 s render deadline.
+# already in flight (410 s) and the 380 s render deadline. Twenty minutes is
+# past that stack. A paid job is still not failed while a picture is in flight.
 _STALE_JOB_MINUTES = 20
 # Tighter bound for the worker: a bridge redelivery (JOB_RUN_TIMEOUT=900s)
 # may only take over an in-progress claim once its heartbeat is this old.
@@ -159,9 +177,11 @@ _STALE_CLAIM_MINUTES = 15
 async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
     """Return an existing non-terminal DB job for this user, if any.
 
-    Unstarted queued work remains recoverable by the reconciler, regardless
-    of age. Only stalled local in-progress work may be retired; ambiguous
-    cloud outcomes require review and must never buy a new generation.
+    A job that has not moved in ``_STALE_JOB_MINUTES`` is marked failed,
+    including when the picture is paid, unless a picture is still in flight.
+    Failing a live render and starting another would bill twice. Once the
+    picture is gone, the old row is failed and the next tap is a new request.
+    Queued work is left for the reconciler, at any age.
     """
     try:
         from .db import get_pool
@@ -173,9 +193,9 @@ async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
         from .db import get_conn, get_conn_autocommit
 
         stale = []
-        # Paid in-flight outcomes must be reviewed after a crash; a timeout
-        # cannot prove the provider did not bill or finish the first request.
-        if not _cloud_generation_enabled():
+        if _paid_picture_in_flight():
+            logger.info("her_pov left the paid job; a picture is still in flight")
+        else:
             async with get_conn_autocommit() as conn:
                 stale = await (
                     await conn.execute(
@@ -324,12 +344,11 @@ async def run_job_from_queue(job_id: str) -> bool:
         from .db import get_conn_autocommit
 
         async with get_conn_autocommit() as conn:
-            # Take the row only if nobody is working it: 'queued', or an
-            # in-progress claim whose heartbeat (updated_at, bumped by every
-            # phase) is older than the whole pipeline could legitimately be.
-            # A bridge-side timeout requeues the message while the first run
-            # is still rendering; re-claiming it bought a second LLM call, a
-            # second GPU render and a second archive row.
+            # Take the row only if nobody is working it. A paid in-progress
+            # job is never reclaimed here: the worker cannot tell whether the
+            # first request was billed, and re-running it would buy a second
+            # generation. A tap after ``_STALE_JOB_MINUTES`` fails that row
+            # and starts a new one. Local work may reclaim a stale claim.
             claim_sql = (
                 "UPDATE companion_her_pov_jobs "
                 "SET status = 'searching', phase = 'searching', "

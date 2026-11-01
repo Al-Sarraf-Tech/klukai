@@ -326,3 +326,101 @@ async def test_every_caller_spends_the_same_daily_allowance(monkeypatch, tmp_pat
     assert await bg.text("mission_update", "p", max_tokens=150, report=report) == ""
     assert report.outcome == "unavailable->defaults"
     assert len(sent) == 2
+
+
+# ── story and summary may use the API; other callers stay on the CLI ──
+
+
+async def test_a_story_without_a_key_stays_on_the_cli(haiku, monkeypatch):
+    api = AsyncMock(return_value="from api")
+    monkeypatch.setattr("app.xai_chat.complete_text", api)
+    assert await bg.text("episode_summary", "p", max_tokens=150) == SECRET_REPLY
+    api.assert_not_awaited()
+    haiku.assert_awaited()
+
+
+async def test_a_story_on_the_api_skips_the_cli(haiku, monkeypatch, caplog):
+    monkeypatch.setenv("KLUKAI_XAI_API_KEY", "unit-test-key")
+    api = AsyncMock(return_value="She stayed.")
+    monkeypatch.setattr("app.xai_chat.complete_text", api)
+    with caplog.at_level(logging.INFO, logger="app.background_llm"):
+        out = await bg.text(
+            "episode_summary", SECRET_PROMPT, max_tokens=150, system="Be brief."
+        )
+    assert out == "She stayed."
+    haiku.assert_not_awaited()
+    assert api.await_args.args == ("Be brief.", SECRET_PROMPT)
+    assert api.await_args.kwargs == {"max_tokens": 8192, "timeout": 120.0}
+    assert SECRET_PROMPT not in caplog.text
+    assert "provider=xai" in caplog.text
+    assert "unit-test-key" not in caplog.text
+
+
+async def test_her_pov_json_comes_from_the_api(haiku, monkeypatch):
+    monkeypatch.setenv("KLUKAI_XAI_API_KEY", "unit-test-key")
+    api = AsyncMock(return_value='{"annotation": "I kept the rain."}')
+    monkeypatch.setattr("app.xai_chat.complete_text", api)
+    out = await bg.json_object("her_pov", "p", max_tokens=512)
+    assert out == {"annotation": "I kept the rain."}
+    assert api.await_args.args[0] == xl.SYSTEM_PROMPT
+    haiku.assert_not_awaited()
+
+
+async def test_a_capped_story_falls_back_to_the_cli(haiku, monkeypatch, caplog):
+    from app.xai_chat import XaiCapError
+
+    monkeypatch.setenv("KLUKAI_XAI_API_KEY", "unit-test-key")
+    api = AsyncMock(side_effect=XaiCapError("cap"))
+    monkeypatch.setattr("app.xai_chat.complete_text", api)
+    with caplog.at_level(logging.INFO, logger="app.background_llm"):
+        assert await bg.text("episode_summary", SECRET_PROMPT, max_tokens=150) == SECRET_REPLY
+    haiku.assert_awaited()
+    assert "capped->cli" in caplog.text
+    assert SECRET_PROMPT not in caplog.text
+
+
+async def test_a_failed_story_falls_back_to_the_cli(haiku, monkeypatch, caplog):
+    from app.xai_chat import XaiChatError
+
+    monkeypatch.setenv("KLUKAI_XAI_API_KEY", "unit-test-key")
+    api = AsyncMock(side_effect=XaiChatError("xai-secret"))
+    monkeypatch.setattr("app.xai_chat.complete_text", api)
+    with caplog.at_level(logging.INFO, logger="app.background_llm"):
+        assert await bg.json_object("her_pov", "p", max_tokens=512) is None
+    haiku.assert_awaited()
+    assert "failed->cli" in caplog.text
+    assert "xai-secret" not in caplog.text
+
+
+async def test_unusable_story_json_falls_back_to_the_cli(haiku, monkeypatch, caplog):
+    monkeypatch.setenv("KLUKAI_XAI_API_KEY", "unit-test-key")
+    monkeypatch.setattr("app.xai_chat.complete_text", AsyncMock(return_value="not json"))
+    haiku.return_value = '{"kept": true}'
+    with caplog.at_level(logging.INFO, logger="app.background_llm"):
+        assert await bg.json_object("her_pov", SECRET_PROMPT, max_tokens=512) == {"kept": True}
+    assert "unusable->cli" in caplog.text
+    assert SECRET_PROMPT not in caplog.text
+
+
+async def test_an_api_crash_falls_back_without_the_message(haiku, monkeypatch, caplog):
+    monkeypatch.setenv("KLUKAI_XAI_API_KEY", "unit-test-key")
+    monkeypatch.setattr(
+        "app.xai_chat.complete_text", AsyncMock(side_effect=RuntimeError("xai-secret"))
+    )
+    with caplog.at_level(logging.WARNING, logger="app.background_llm"):
+        assert await bg.text("episode_summary", "p", max_tokens=150) == SECRET_REPLY
+    assert "RuntimeError" in caplog.text
+    assert "xai-secret" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "caller",
+    ["extraction", "promises", "memory_recall_episodes", "dream"],
+)
+async def test_other_background_callers_stay_on_the_cli(haiku, monkeypatch, caller):
+    monkeypatch.setenv("KLUKAI_XAI_API_KEY", "unit-test-key")
+    api = AsyncMock(return_value="from api")
+    monkeypatch.setattr("app.xai_chat.complete_text", api)
+    assert await bg.text(caller, "p", max_tokens=50) == SECRET_REPLY
+    api.assert_not_awaited()
+    haiku.assert_awaited()

@@ -236,29 +236,41 @@ def command(profile: Path, work: Path, args: list[str], *, auth=None, binary=Non
     return [str(binary)] + args
 
 
-def _scrub_cli(text: str) -> str:
-    """Drop credentials from a CLI failure before it is logged."""
-    cleaned = re.sub(r'(?i)(bearer\s+)\S+', r'\1[redacted]', text)
-    cleaned = re.sub(
-        r'(?i)\b(api[_-]?key|token|secret|password|authorization)\b\s*[:=]\s*\S+',
-        r'\1=[redacted]',
-        cleaned,
-    )
-    cleaned = re.sub('xai-' + r'[A-Za-z0-9]{8,}', '[redacted]', cleaned)
-    return " ".join(cleaned.split())[:300]
+_REASON = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,40}$")
+_STOP_JSON = re.compile(r'"stop_reason"\s*:\s*"([^"\\]*)"')
+_STOP_EQ = re.compile(
+    r"(?:^|\s)stop_reason=([A-Za-z_][A-Za-z0-9_]{0,40})(?=\s|$)"
+)
 
 
-def _log_cli_failure(returncode: int | None, detail: str) -> None:
-    stop = "-"
-    for line in detail.splitlines():
-        if "stop_reason" in line:
-            stop = _scrub_cli(line)[:120]
-            break
+def _failure_reason(detail: str, error_class: str | None) -> str:
+    """A stop-reason token or an error class. Never a slice of CLI text."""
+    for pattern in (_STOP_JSON, _STOP_EQ):
+        match = pattern.search(detail)
+        if match and _REASON.fullmatch(match.group(1)):
+            return match.group(1)
+    if error_class and _REASON.fullmatch(error_class):
+        return error_class
+    return "error"
+
+
+def _log_cli_failure(
+    returncode: int | None,
+    detail: str = "",
+    *,
+    duration_s: float | None = None,
+    error_class: str | None = None,
+) -> None:
+    """Exit code, stop reason or error class, and duration. No CLI text."""
+    if duration_s is None:
+        duration = "-"
+    else:
+        duration = f"{max(0.0, float(duration_s)):.3f}"
     logger.warning(
-        "grok cli failed exit=%s stop=%s detail=%s",
+        "grok cli failed exit=%s reason=%s duration_s=%s",
         "-" if returncode is None else returncode,
-        stop,
-        _scrub_cli(detail),
+        _failure_reason(detail, error_class),
+        duration,
     )
 
 
@@ -391,6 +403,7 @@ def artifact(profile: Path, session: str, references: list[bytes]) -> bytes:
 
 
 def execute(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=None) -> str:
+    started = time.monotonic()
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         auth = account_auth()
         process = subprocess.Popen(command(profile, work, args, auth=auth), cwd=work,
@@ -417,6 +430,11 @@ def execute(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=N
             os.killpg(process.pid, signal.SIGKILL); process.wait()
             if isinstance(exc, subprocess.TimeoutExpired):
                 # Unknown server completion: do not automatically issue another image.
+                _log_cli_failure(
+                    process.returncode,
+                    duration_s=time.monotonic() - started,
+                    error_class="TimeoutExpired",
+                )
                 raise agy.RuntimeError('Grok timed out with unknown completion; not retried') from None
             raise
         if cancelled:
@@ -427,7 +445,9 @@ def execute(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=N
         if process.returncode:
             err.seek(0)
             detail = (raw + err.read(MAX_OUTPUT)).decode('utf-8', 'replace')
-            _log_cli_failure(process.returncode, detail)
+            _log_cli_failure(
+                process.returncode, detail, duration_s=time.monotonic() - started
+            )
             provider_error(detail)
         try: return raw.decode('utf-8')
         except UnicodeError as exc: raise agy.RuntimeError('Grok output was not UTF-8') from exc
@@ -450,6 +470,7 @@ def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, canc
     problems are ProviderUnavailable, everything else RuntimeError).
     """
     auth = account_auth()
+    started = time.monotonic()
     with tempfile.TemporaryFile() as err:
         process = subprocess.Popen(command(profile, work, args, auth=auth), cwd=work,
             env=environment(home=profile, auth=auth),
@@ -485,6 +506,11 @@ def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, canc
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     _kill(process)
+                    _log_cli_failure(
+                        process.returncode,
+                        duration_s=time.monotonic() - started,
+                        error_class="TimeoutExpired",
+                    )
                     raise agy.RuntimeError('Grok timed out with unknown completion; not retried')
                 try:
                     item = lines.get(timeout=min(0.2, remaining))
@@ -503,11 +529,18 @@ def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, canc
                 # stdout is closed but the CLI lingers: the turn is complete or
                 # never will be. Do not hold the caller's slot on it.
                 _kill(process)
+                _log_cli_failure(
+                    process.returncode,
+                    duration_s=time.monotonic() - started,
+                    error_class="TimeoutExpired",
+                )
                 raise agy.RuntimeError('Grok did not exit after its output closed') from None
             if process.returncode:
                 err.seek(0)
                 detail = err.read(MAX_OUTPUT).decode('utf-8', 'replace')
-                _log_cli_failure(process.returncode, detail)
+                _log_cli_failure(
+                    process.returncode, detail, duration_s=time.monotonic() - started
+                )
                 provider_error('Grok chat process failed\n' + detail)
         except BaseException:
             _kill(process)

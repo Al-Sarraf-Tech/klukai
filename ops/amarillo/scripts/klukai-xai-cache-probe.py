@@ -14,11 +14,16 @@ import json
 import os
 import sys
 import urllib.request
+import uuid
 
 URL = "https://api.x.ai/v1/chat/completions"
 MODEL = "grok-4.7"
 PERSONA = "You are a terse assistant. Answer in one short sentence."
-CONV = "klukai-cache-probe"
+
+
+def conversation_id() -> str:
+    """xAI routes a prompt cache only when this header is a UUID."""
+    return str(uuid.uuid4())
 
 
 def messages(turns: list[tuple[str, str]], volatile: str) -> list[dict[str, str]]:
@@ -41,6 +46,7 @@ def main() -> int:
         print("skip: KLUKAI_XAI_API_KEY is not set")
         return 0
     history: list[tuple[str, str]] = []
+    conv = conversation_id()
     user_lines = ["Name one color.", "Name one city.", "Name one river."]
     for index, line in enumerate(user_lines, start=1):
         history.append(("user", line))
@@ -57,7 +63,7 @@ def main() -> int:
             headers={
                 "Authorization": "Bearer " + key,
                 "Content-Type": "application/json",
-                "x-grok-conv-id": CONV,
+                "x-grok-conv-id": conv,
             },
             method="POST",
         )
