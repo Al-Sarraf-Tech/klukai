@@ -450,6 +450,7 @@ PLACES: dict[str, Place] = {
             "open road",
             False,
             "motorcycle, motorbike, on the bike, on your bike, on my bike, on her bike, "
+            "your bike, my bike, her bike, the bike, a bike, "
             "bike ride, the highway, highway, the road, road trip, on the road, riding, "
             "ride, night ride, joyride",
             "an open highway, motorcycle, asphalt stretching to the horizon",

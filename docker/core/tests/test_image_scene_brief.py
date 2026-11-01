@@ -158,6 +158,27 @@ class TestOwnerScenarios:
         assert "rain on the window" in prompt
         assert "umbrella" not in prompt and "wet" not in prompt.split(", ")
 
+    def test_her_day_does_not_replace_the_bike_he_asked_to_see(self):
+        brief = _brief("show me your bike", her_place=("Lounge", "Tea Time"))
+        assert brief.key == "road"
+        assert "motorcycle" in brief.place.tags
+
+    @pytest.mark.parametrize(
+        "request_text",
+        ["draw yourself on an exercise bike", "draw yourself with a toy bike"],
+    )
+    def test_other_kinds_of_bike_are_not_her_motorcycle(self, request_text):
+        brief = _brief(request_text, her_place=("Lounge", "Tea Time"))
+        assert brief.key != "road"
+
+    def test_his_bike_in_an_older_turn_does_not_move_the_next_picture(self):
+        brief = _brief(
+            "draw yourself",
+            ("user", "i fixed my bike yesterday"),
+            her_place=("Lounge", "Tea Time"),
+        )
+        assert brief.key == "tea_counter"
+
     def test_plain_request_with_no_context_is_neutral(self):
         brief = _brief("draw us together")
         assert brief.source == sc.DEFAULT
@@ -192,6 +213,13 @@ class TestPriority:
             ("draw yourself in your quarters", "her_quarters"),
             ("draw us at the movies", "cinema"),
             ("draw us riding the motorcycle at night", "road"),
+            ("show me your bike", "road"),
+            ("show me the bike", "road"),
+            ("send me a picture of your bike", "road"),
+            ("draw yourself with a bike", "road"),
+            ("show me\n\nSubject: Klukai with her bike", "road"),
+            ("show me your bike in the garage", "garage"),
+            ("show me your bike in the hangar", "hangar"),
             ("draw us on the elmo's roof", "elmo_topside"),
             ("draw yourself on top of the elmo at sunset", "elmo_topside"),
             ("draw yourself on the roof of the elmo", "elmo_topside"),

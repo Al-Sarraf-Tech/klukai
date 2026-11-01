@@ -14,6 +14,7 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- A picture of something he asked to see now has it in the picture. "show me your bike" drew her at the tea counter with no bike and passed the check: the phrase list only knew "on your bike", so her schedule picked the place, and the checker only rejected what contradicted the request. "your bike", "the bike" and "a bike" now put her on the road with it, and a picture missing the thing the request's first line asks to see is redrawn.
 - "On top of the Elmo" draws her on its roof. It used to mean the Elmo in general,
   so a sunset on the roof came back as a corridor.
 - Scheduled messages match her level again. 72% of her messages to the owner are

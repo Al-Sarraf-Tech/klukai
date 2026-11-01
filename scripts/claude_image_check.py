@@ -47,7 +47,7 @@ Reject only for clear, major defects a viewer would notice at once:
 - anatomy: extra, missing or fused limbs or fingers, a deformed face or eyes, broken proportions;
 - people: an unexpected extra person, anyone who looks underage, or a Commander who is not an adult human man
   (never a woman, a doll or a child);
-- request: the subject, outfit or pose clearly contradicts the request;
+- request: the subject, outfit or pose clearly contradicts the request, or a thing its first line asks to see (her bike, say) is not in the picture at all. A first line starting "Setting:" asks to see nothing;
 - artifacts: visible text, watermarks, signatures, UI, frames, split panels or collage,
   heavy blur or corruption;
 - style: the render is photorealistic, photographic, 3D-rendered or semi-realistic

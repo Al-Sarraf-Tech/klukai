@@ -235,6 +235,17 @@ def test_a_wrong_background_alone_never_costs_him_the_picture(check):
     assert "setting or background" in minor
 
 
+def test_a_picture_without_what_he_asked_to_see_is_rejected(check):
+    # 2026-11-01: "show me your bike" drew her at the tea counter, and it passed.
+    request = next(
+        line for line in check.RUBRIC.splitlines() if line.startswith("- request:")
+    )
+    assert "first line" in request and "not in the picture" in request
+    # A Setting line is a background, which stays minor whatever it names.
+    assert "Setting:" in request
+    assert "a setting or background that differs" in check.RUBRIC
+
+
 def test_a_group_picture_is_judged_as_one(check):
     assert check.expected_people({"prompt": "2 women; a range"}).startswith("Klukai and the other")
     assert check.expected_people({"prompt": "a range"}) == "Klukai alone"
