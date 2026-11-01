@@ -101,14 +101,20 @@ def register_health_routes(
         except Exception:
             results["redis"] = {"status": "down"}
 
-        # Language model: account-login Grok. The probe only checks that the
-        # host worker socket is present. It does not send a prompt.
+        # Language model. Claude Haiku is reported as configured (the probe
+        # never sends a prompt). Grok's probe only checks that the host worker
+        # socket is present.
         from .grok_chat import configured as grok_configured
+        from .llm_router import chat_provider
 
-        results["llm"] = {
-            "status": "ok" if grok_configured() else "down",
-            "provider": "grok",
-        }
+        provider, model = chat_provider()
+        if provider == "anthropic":
+            results["llm"] = {"status": "ok", "provider": provider, "model": model}
+        else:
+            results["llm"] = {
+                "status": "ok" if grok_configured() else "down",
+                "provider": "grok",
+            }
 
         results.update(await _image_subsystems())
 

@@ -14,6 +14,11 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- Chat and the agent loop use Claude Haiku 5.5 (`claude-haiku-5-5`) at
+  effort `xhigh` with adaptive thinking when `KLUKAI_CLAUDE_PRIMARY=true`
+  and `ANTHROPIC_API_KEY` are set. A Haiku failure before any text falls
+  back to the Grok chat path (xAI API, then the CLI) instead of the
+  "Communications disrupted" line. Subsystem health reports the chat model.
 - Story and summary API calls use their own circuit breaker, so a story
   timeout does not send chat to the CLI.
 - A Grok CLI failure log is the exit code, a stop reason or error class,

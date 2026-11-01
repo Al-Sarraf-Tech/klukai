@@ -4,8 +4,19 @@
 Dominus-Nobara or Amarillo. Voice in and out is Fish Audio. There is no local
 fallback of any kind. Design: `docs/superpowers/specs/2026-10-26-cloud-only-ai-design.md`.
 
-**xAI API for chat and pictures (owner decision, 2026-10-31).** Chat replies
-and picture generation use the prepaid key in `KLUKAI_XAI_API_KEY`, loaded from
+**Claude Haiku 5.5 for chat (owner decision, 2026-10-31).** Jamal: "set chat
+model to haiku xhigh". With `KLUKAI_CLAUDE_PRIMARY=true` and
+`ANTHROPIC_API_KEY` set, interactive chat and the agent loop use
+`claude-haiku-5-5` through the Messages API with `output_config.effort`
+`xhigh`, adaptive thinking and `max_tokens` 16000 (thinking counts toward it).
+The reply is buffered and validated before it is sent. A Haiku failure before
+any text (HTTP error, timeout, `max_tokens`, an empty reply) falls back to the
+Grok chat path below: the xAI API, then the CLI. Without both settings chat is
+Grok. Claude API calls are covered by the owner's paid Claude API authorization
+(2026-10-21). Background text is not routed through Haiku.
+
+**xAI API for chat and pictures (owner decision, 2026-10-31; chat is now the
+Haiku fallback).** Chat replies and picture generation use the prepaid key in `KLUKAI_XAI_API_KEY`, loaded from
 `~/.config/klukai/xai.env` at runtime. The key is never committed, logged, or
 read by application code from that file. Chat is `grok-4.7` at reasoning
 effort low, streamed from `https://api.x.ai/v1/chat/completions`. Pictures are
@@ -27,8 +38,8 @@ Fish voice is unchanged.
 the background path).** Background text, the picture checker, and the chat
 and picture fallbacks run through the official Grok CLI on the owner's account
 login. `disable_api_key_auth = true` on that path. The Claude image checker
-and the Sonnet/Haiku chat path stay in the tree and are not selected. See the
-section below.
+stays in the tree and is not selected; chat is Haiku (above). See the section
+below.
 Do not reintroduce LM Studio, Dominus voice, ComfyUI, the GPU lease, local
 embeddings or Qdrant into `docker/core`; `tests/test_cloud_only_invariant.py`
 fails if any of them comes back. `ops/dominus-nobara` is the retired Dominus

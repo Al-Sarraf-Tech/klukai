@@ -67,14 +67,17 @@ class LLMCompletionsMixin(ABC):
     @abstractmethod
     def _select_secondary(self, config: LLMConfig) -> bool: ...
 
+    @abstractmethod
+    def _select_grok(self, config: LLMConfig) -> None: ...
+
     async def stream(
         self, system_prompt: str, messages: list[dict[str, Any]], config: LLMConfig
     ) -> AsyncIterator[str]:
-        """Answer with the selected model; a Sonnet failure falls back to Haiku.
+        """Answer with the selected model; a Claude failure falls back to Grok.
 
-        The answer is buffered and validated before anything is yielded, so a
-        failed primary can fall back without concatenating two answers. If no
-        model answers, FAILURE_SENTINEL is the whole response.
+        A Claude answer is buffered and validated before anything is yielded,
+        so a failure can fall back to the Grok stream without concatenating two
+        answers. If no model answers, FAILURE_SENTINEL is the whole response.
         """
         from .llm_router import FAILURE_SENTINEL
 
@@ -84,10 +87,19 @@ class LLMCompletionsMixin(ABC):
             return
         try:
             response = await self._complete_with_fallback(
-                system_prompt, messages, config
+                system_prompt, messages, config, grok_fallback=False
             )
-        except _RETRYABLE:
-            yield FAILURE_SENTINEL
+        except _RETRYABLE as exc:
+            if config.provider != "anthropic" or self._anthropic_http is None:
+                yield FAILURE_SENTINEL
+                return
+            # Nothing was yielded yet. Never log bodies, prompts or headers.
+            logger.warning(
+                "Claude chat failed (%s); answering with Grok", type(exc).__name__
+            )
+            self._select_grok(config)
+            async for piece in self._stream_grok(system_prompt, messages):
+                yield piece
             return
         yield response["choices"][0]["message"]["content"]
 
@@ -183,6 +195,7 @@ class LLMCompletionsMixin(ABC):
         tools: list[dict[str, Any]] | None = None,
         *,
         allow_tools: bool = True,
+        grok_fallback: bool = True,
     ) -> dict[str, Any]:
         from .llm_router import GROK_MODEL, model_family
 
@@ -204,12 +217,37 @@ class LLMCompletionsMixin(ABC):
             )
             raise ValueError("Unavailable LLM provider or model")
         try:
+            return await self._complete_claude(
+                system_prompt, messages, config, tools, allow_tools=allow_tools
+            )
+        except _RETRYABLE as exc:
+            if not grok_fallback:
+                raise
+            logger.warning(
+                "Claude chat failed (%s); answering with Grok", type(exc).__name__
+            )
+            self._select_grok(config)
+        return await self._complete_grok(
+            system_prompt, messages, config, tools, allow_tools=allow_tools
+        )
+
+    async def _complete_claude(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        config: LLMConfig,
+        tools: list[dict[str, Any]] | None = None,
+        *,
+        allow_tools: bool = True,
+    ) -> dict[str, Any]:
+        """A Sonnet config falls back to Haiku; a Haiku config is tried once."""
+        from .llm_router import CLAUDE_PRIMARY, model_family
+
+        try:
             return await self._complete_anthropic(
                 system_prompt, messages, config, tools, allow_tools=allow_tools
             )
         except _RETRYABLE as exc:
-            from .llm_router import CLAUDE_PRIMARY
-
             if model_family(config.model) == CLAUDE_PRIMARY:
                 self._primary_failed(exc)
             if not self._select_secondary(config):
@@ -228,6 +266,7 @@ class LLMCompletionsMixin(ABC):
         allow_tools: bool = True,
     ) -> dict[str, Any]:
         from .llm_router import (
+            CHAT_MAX_TOKENS,
             CLAUDE_PRIMARY,
             ANTHROPIC_MESSAGES_URL,
             MODEL_EFFORT,
@@ -245,7 +284,7 @@ class LLMCompletionsMixin(ABC):
             "model": family,
             "system": system,
             "messages": turns,
-            "max_tokens": min(max(config.max_tokens, 1), 8192),
+            "max_tokens": min(max(config.max_tokens, 1), CHAT_MAX_TOKENS),
             "thinking": {"type": "adaptive"},
             "output_config": {"effort": MODEL_EFFORT[family]},
         }
@@ -364,7 +403,7 @@ class LLMCompletionsMixin(ABC):
         *,
         allow_tools: bool = True,
     ) -> dict[str, Any]:
-        """Tool-loop completion. Grok failures raise; they do not call a paid API."""
+        """Tool-loop completion. Claude falls back to Grok; Grok failures raise."""
         return await self._complete_with_fallback(
             system_prompt, messages, config, tools, allow_tools=allow_tools
         )

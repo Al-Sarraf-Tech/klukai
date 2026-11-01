@@ -1,10 +1,11 @@
-"""Cloud chat through account-login Grok.
+"""Cloud chat: Claude Haiku 5.5 at xhigh effort, with Grok as the fallback.
 
-Owner decision 2026-10-30: every Klukai model call runs through the official
-Grok CLI on the account login. Interactive chat and the agent loop use
-grok-4.7 at low effort. A failure stays on that path: there is no paid
-Anthropic fallback. The Claude constants below remain only so older unit
-tests of the unused Messages client still describe that client.
+Owner decision 2026-10-31: "set chat model to haiku xhigh". With
+KLUKAI_CLAUDE_PRIMARY=true and ANTHROPIC_API_KEY set, interactive chat and the
+agent loop use claude-haiku-5-5 at effort xhigh with adaptive thinking. A
+Haiku failure before any text falls back to the Grok chat path (the xAI API,
+then the account-login CLI). Without both settings, chat is Grok as decided on
+2026-10-30. Background text is not routed here.
 """
 
 from __future__ import annotations
@@ -22,13 +23,16 @@ from .llm_completions import LLMCompletionsMixin
 
 logger = logging.getLogger(__name__)
 
-# Owner authorized the billable API primary on 2026-10-14. It is not the chat
-# path as of 2026-10-30.
+# Owner authorized the billable API primary on 2026-10-14. Chat is Haiku at
+# xhigh as of 2026-10-31; Sonnet is no longer selected.
 CLAUDE_PRIMARY = "claude-sonnet-5-5"
 CLAUDE_SECONDARY = "claude-haiku-5-5"
+CHAT_MODEL = CLAUDE_SECONDARY
 ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_MAX_RESPONSE_BYTES = 1024 * 1024
-MODEL_EFFORT = {CLAUDE_PRIMARY: "medium", CLAUDE_SECONDARY: "high"}
+MODEL_EFFORT = {CLAUDE_PRIMARY: "medium", CLAUDE_SECONDARY: "xhigh"}
+# Adaptive thinking at xhigh counts toward max_tokens, so leave room for it.
+CHAT_MAX_TOKENS = 16000
 # Pinned Grok CLI 1.0.62 accepts this id. Chat and background default to low;
 # pictures use xhigh. KLUKAI_GROK_CHAT_EFFORT overrides the chat default.
 GROK_MODEL = "grok-4.7"
@@ -51,6 +55,13 @@ def claude_primary_configured() -> bool:
     return os.environ.get("KLUKAI_CLAUDE_PRIMARY", "false").lower() == "true" and bool(
         os.environ.get("ANTHROPIC_API_KEY", "").strip()
     )
+
+
+def chat_provider() -> tuple[str, str]:
+    """(provider, model) that answers chat with the current settings."""
+    if claude_primary_configured():
+        return "anthropic", CHAT_MODEL
+    return "grok", GROK_MODEL
 
 
 # Yielded as the whole response when every backend failed BEFORE any token
@@ -97,7 +108,7 @@ def _config(model: str) -> LLMConfig:
         provider="anthropic",
         model=model,
         base_url=ANTHROPIC_MESSAGES_URL,
-        max_tokens=4096,
+        max_tokens=CHAT_MAX_TOKENS,
         read_timeout=90.0,
     )
 
@@ -113,7 +124,7 @@ def _grok_config() -> LLMConfig:
 
 
 class LLMRouter(LLMCompletionsMixin):
-    """Routes every turn to account-login Grok 4.7 at low effort."""
+    """Routes every turn to Haiku at xhigh when Claude is on, else to Grok."""
 
     def __init__(self) -> None:
         self._anthropic_http: httpx.AsyncClient | None = None
@@ -121,11 +132,23 @@ class LLMRouter(LLMCompletionsMixin):
         self._anthropic_retry_at = 0.0
 
     async def init(self) -> None:
-        # Do not open an Anthropic client. A leftover key must not bill chat.
+        # A key alone never opens the paid client: the switch must be on too.
         self._anthropic_http = None
-        if os.environ.get("ANTHROPIC_API_KEY", "").strip() or (
-            os.environ.get("KLUKAI_CLAUDE_PRIMARY", "false").lower() == "true"
-        ):
+        enabled = os.environ.get("KLUKAI_CLAUDE_PRIMARY", "false").lower() == "true"
+        key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if claude_primary_configured():
+            # Never inherit endpoint/proxy overrides.
+            self._anthropic_http = httpx.AsyncClient(
+                headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+                timeout=httpx.Timeout(90.0, connect=5.0),
+                trust_env=False,
+            )
+            logger.info("Chat is %s at effort %s", CHAT_MODEL, MODEL_EFFORT[CHAT_MODEL])
+        elif enabled:
+            logger.warning(
+                "KLUKAI_CLAUDE_PRIMARY is on without ANTHROPIC_API_KEY; chat is Grok"
+            )
+        elif key:
             logger.warning("Claude is not the chat path; Grok account login is")
 
     async def close(self) -> None:
@@ -159,10 +182,17 @@ class LLMRouter(LLMCompletionsMixin):
         interactive: bool = False,
     ) -> LLMConfig:
         """Decide which model answers this message."""
-        if user_override and user_override != GROK_MODEL:
+        model = CHAT_MODEL if self._anthropic_configured() else GROK_MODEL
+        if (
+            user_override
+            and model_family(user_override) != model
+            and (user_override != model)
+        ):
             logger.warning(
-                "Ignoring model override %r; chat is grok-4.7", user_override
+                "Ignoring model override %r; chat is %s", user_override, model
             )
+        if model == CHAT_MODEL:
+            return _config(CHAT_MODEL)
         return _grok_config()
 
     async def needs_agent(self, message: str, *, interactive: bool = False) -> bool:
@@ -192,6 +222,17 @@ class LLMRouter(LLMCompletionsMixin):
             type(exc).__name__,
             status,
         )
+
+    def _select_grok(self, config: LLMConfig) -> None:
+        """Move a failed Claude config onto the Grok chat path."""
+        grok = _grok_config()
+        # Callers persist this config and display its model in the done frame.
+        config.provider, config.model, config.base_url = (
+            grok.provider,
+            grok.model,
+            grok.base_url,
+        )
+        config.max_tokens, config.read_timeout = grok.max_tokens, grok.read_timeout
 
     def _select_secondary(self, config: LLMConfig) -> bool:
         """Switch a failed Sonnet config to Haiku; False if it already was."""

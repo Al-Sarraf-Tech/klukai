@@ -1,7 +1,7 @@
-"""Chat is account-login Grok 4.7 at medium effort. No paid fallback.
+"""With Claude switched off, chat is Grok 4.7. No paid Claude fallback.
 
-The Anthropic Messages client remains for direct unit coverage of that unused
-transport. Routing never selects it.
+A key alone (KLUKAI_CLAUDE_PRIMARY off) never opens the Anthropic client.
+The Haiku chat path is covered in test_haiku_chat.py.
 """
 
 import asyncio
@@ -30,7 +30,7 @@ def turn(text="Hello."):
 
 @pytest.fixture
 async def router(monkeypatch):
-    monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "true")
+    monkeypatch.setenv("KLUKAI_CLAUDE_PRIMARY", "false")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
     r = lr.LLMRouter()
     await r.init()

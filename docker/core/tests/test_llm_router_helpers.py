@@ -20,7 +20,7 @@ class TestCloudModels:
     def test_only_two_claude_models_have_an_effort(self):
         assert llm_router.MODEL_EFFORT == {
             llm_router.CLAUDE_PRIMARY: "medium",
-            llm_router.CLAUDE_SECONDARY: "high",
+            llm_router.CLAUDE_SECONDARY: "xhigh",
         }
 
     def test_no_local_model_aliases_remain(self):

@@ -4,10 +4,14 @@
 Dominus-Nobara or Amarillo. Voice in and out is Fish Audio. There is no local
 fallback of any kind. Design: `docs/superpowers/specs/2026-10-26-cloud-only-ai-design.md`.
 
-**Grok account login (owner decision, 2026-10-30).** Chat, background text,
-pictures, and the picture checker run through the official Grok CLI
-(`grok-4.7`, effort `medium`) on the owner's account login. No xAI API key,
-no paid credits, and no fallback to a paid API. Fish voice is unchanged.
+**Chat is Claude Haiku 5.5 at xhigh (owner decision, 2026-10-31).** With
+`KLUKAI_CLAUDE_PRIMARY=true` and `ANTHROPIC_API_KEY`, chat and the agent loop
+use `claude-haiku-5-5`, `output_config.effort` `xhigh`, adaptive thinking.
+A Haiku failure before any text falls back to Grok: the xAI API
+(`grok-4.7`, prepaid `KLUKAI_XAI_API_KEY`, daily cap `KLUKAI_API_DAILY_USD_CAP`),
+then the Grok CLI. Pictures use the xAI API. Background text (memory recall,
+extraction, promises, mood) still runs on the Grok CLI on the owner's account
+login (2026-10-30). Details: `AGENTS.md`. Fish voice is unchanged.
 Do not reintroduce LM Studio, Dominus voice, ComfyUI, the GPU lease, local
 embeddings or Qdrant into `docker/core`; `tests/test_cloud_only_invariant.py`
 fails if any of them comes back. `ops/dominus-nobara` is the retired Dominus

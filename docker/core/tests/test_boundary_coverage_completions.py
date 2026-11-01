@@ -166,14 +166,16 @@ async def test_unused_sonnet_client_still_falls_back_to_haiku(connect):
     assert result["choices"][0]["message"]["content"] == "public reply"
 
 
-async def test_unused_haiku_client_does_not_switch_again(connect):
+async def test_a_failed_haiku_does_not_switch_to_another_claude_model(connect):
     def handler(request):
         raise httpx.ConnectError("down")
 
     router = connect(handler)
     config = LLMConfig(provider="anthropic", model=routing.CLAUDE_SECONDARY)
     with pytest.raises(httpx.ConnectError):
-        await router.complete_chat("persona", MESSAGES, config)
+        await router._complete_with_fallback(
+            "persona", MESSAGES, config, grok_fallback=False
+        )
     assert config.model == routing.CLAUDE_SECONDARY
 
 

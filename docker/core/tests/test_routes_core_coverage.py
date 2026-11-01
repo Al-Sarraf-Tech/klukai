@@ -249,6 +249,14 @@ class TestSubsystemHealth:
         }
         assert result["status"] == ("ok" if grok else "degraded")
 
+    async def test_llm_status_reports_haiku_when_claude_is_on(self, monkeypatch):
+        """Haiku answers chat: reported as configured, without a prompt."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+        result = await self._subsystems(monkeypatch, primary=True, grok=False)
+        assert result["subsystems"]["llm"] == {
+            "status": "ok", "provider": "anthropic", "model": "claude-haiku-5-5",
+        }
+
     async def test_a_down_image_worker_degrades_the_overall_status(self, monkeypatch):
         result = await self._subsystems(monkeypatch, worker_ready=False)
         assert result["subsystems"]["images"]["status"] == "down"
