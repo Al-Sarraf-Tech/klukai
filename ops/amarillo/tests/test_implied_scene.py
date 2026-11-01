@@ -66,3 +66,25 @@ def test_undress_in_a_bath_becomes_a_towel_and_steam():
     for word in ("nude", "wet skin", "barely"):
         assert word not in out
     assert "wrapped in a large white towel" in out and "blanket" not in out
+
+
+CHAT = (
+    "draw yourself in the bath\n\nSubject: her in the bath\n\n"
+    "Setting: Indoors - a steamy washroom, tiled walls.\n\n"
+    "One polished anime illustration of the scene below.\n"
+    "Scene and appearance: Klukai; one woman; steam; towel barely covering."
+)
+
+
+@pytest.mark.parametrize("rewrite", [scene.implied, scene.plain])
+def test_his_typed_sentence_is_left_out_and_the_setting_kept(rewrite):
+    out = rewrite(CHAT)
+    assert out.startswith("Setting: Indoors - a steamy washroom")
+    assert "draw yourself" not in out and "Subject:" not in out
+
+
+def test_a_solo_picture_is_never_told_between_adults():
+    solo = scene.implied(CHAT)
+    assert "modest and tasteful" in solo and "between adults" not in solo
+    assert "wrapped in a large white towel" in solo
+    assert "between adults" in scene.implied(REFUSED)

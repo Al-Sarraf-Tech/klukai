@@ -25,6 +25,7 @@ from claude_image_check import (
     MIN_TIMEOUT,
     RUBRIC,
     downscale_png,
+    expected_people,
     fix_hint,
     parse,
     validate_verdict,
@@ -62,7 +63,7 @@ def _block(raw: bytes) -> dict:
 
 def prompt_document(candidate: bytes, value: dict, references: dict) -> str:
     """ACP content the pinned CLI accepts as a prompt file."""
-    who = "Klukai and the Commander" if value.get("include_commander") else "Klukai alone"
+    who = expected_people(value)
     description = (
         f"\nCommander description (text only): {COMMANDER_TEXT_DESCRIPTION}"
         if value.get("include_commander")

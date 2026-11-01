@@ -192,7 +192,11 @@ def test_fix_hint_names_only_major_issues(check):
     issues = [{"severity": "minor", "what": "teardrop hidden"},
               {"severity": "major", "what": "extra arm"}, {"severity": "major", "what": "text in corner"}]
     hint = check.fix_hint(issues)
-    assert "extra arm" in hint and "text in corner" in hint and "teardrop" not in hint
+    assert "Natural anatomy" in hint and "Every surface is plain" in hint and "teardrop" not in hint
+    assert "extra arm" not in hint and "text in corner" not in hint
+    assert "Correct this: her hair is orange" in check.fix_hint(
+        [{"severity": "major", "what": "her hair is orange"}]
+    )
     assert check.fix_hint([{"severity": "minor", "what": "small"}]) == ""
     assert check.fix_hint([object(), {"severity": "major"}, {"severity": "major", "what": 5}]) == ""
     assert len(check.fix_hint([{"severity": "major", "what": "z" * 500}] * 3)) <= 600
@@ -215,8 +219,9 @@ def test_fix_hint_does_not_repeat_the_lettering_it_rejected(check):
     ])
     for word in ("ELMO", "OPEN", "Communar"):
         assert word not in hint
-    assert "Large red lettering text is visible on the ceiling" in hint
-    assert "The Commander's shirt" in hint
+    assert "Every surface is plain" in hint and "ceiling" not in hint
+    assert "lettering" in check.fix_hint([{"severity": "major", "what": "her hair reads 'OPEN' in places"}])
+    assert "OPEN" not in check.fix_hint([{"severity": "major", "what": "her hair reads 'OPEN' in places"}])
 
 
 def test_a_wrong_background_alone_never_costs_him_the_picture(check):
@@ -228,3 +233,11 @@ def test_a_wrong_background_alone_never_costs_him_the_picture(check):
     assert "subject, outfit or pose" in request_line
     minor = check.RUBRIC.split("Everything else is minor", 1)[1]
     assert "setting or background" in minor
+
+
+def test_a_group_picture_is_judged_as_one(check):
+    assert check.expected_people({"prompt": "2 women; a range"}).startswith("Klukai and the other")
+    assert check.expected_people({"prompt": "a range"}) == "Klukai alone"
+    assert check.expected_people({"prompt": "x", "include_commander": True}) == "Klukai and the Commander"
+    assert "anyone who looks underage" in check.RUBRIC
+    assert "she looks underage" in check.RUBRIC

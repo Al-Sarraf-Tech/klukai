@@ -824,7 +824,7 @@ class TestImageGen:
         assert "night, warm lamp light, city lights through the window" in prompt
         assert "rec room" not in prompt and "secret plans" not in prompt
         assert "moonlight" not in prompt and "floating hair" not in prompt
-        assert "Avoid these visual elements: outdoor scenery; open sky." in prompt
+        assert "Avoid these visual elements" not in prompt
         assert generate.await_args.kwargs["include_commander"] is True
         assert generate.repeat_claim.await_args.args[1] == explicit_request_id(
             "jalsarraf",
@@ -869,7 +869,7 @@ class TestImageGen:
         place.assert_awaited_once_with("u1", 5)
         prompt = generate.await_args.args[0]
         assert "the vehicle hangar, windowless riveted steel interior" in prompt
-        assert "naval vessel" in prompt  # the avoid list, never the scene
+        assert "naval vessel" not in prompt  # a windowless room needs no avoid list
         assert generate.repeat_claim.await_args.args[1] == explicit_request_id(
             "u1", "draw yourself", 832, 1216, False, "hangar"
         )
@@ -927,7 +927,7 @@ class TestImageGen:
         prompt = gen.await_args.args[0]
         assert "the vehicle hangar" in prompt and "beach" not in prompt
         assert "1boy" not in prompt  # her "we" never adds him
-        assert "ship" in gen.await_args.kwargs["negative_extra"]
+        assert gen.await_args.kwargs["negative_extra"] is None
 
     async def test_agy_explicit_couple_request_selects_commander_and_landscape(
         self, bg_mocks, monkeypatch

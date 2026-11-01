@@ -45,7 +45,7 @@ Reject only for clear, major defects a viewer would notice at once:
 - identity: she is not recognisably Klukai (hair not silver/white, eyes not green, a different
   face or character), or she looks underage;
 - anatomy: extra, missing or fused limbs or fingers, a deformed face or eyes, broken proportions;
-- people: an unexpected extra person, or a Commander who is not an adult human man
+- people: an unexpected extra person, anyone who looks underage, or a Commander who is not an adult human man
   (never a woman, a doll or a child);
 - request: the subject, outfit or pose clearly contradicts the request;
 - artifacts: visible text, watermarks, signatures, UI, frames, split panels or collage,
@@ -60,6 +60,15 @@ penalise intimacy or attire the request asks for.
 
 Answer with only this JSON and nothing else:
 {"verdict": "pass" or "reject", "issues": [{"severity": "major" or "minor", "what": "short description"}]}"""
+
+
+def expected_people(value: dict) -> str:
+    """Who the render was asked to show, in the terms the renderer's brief uses."""
+    if value.get("include_commander"):
+        return "Klukai and the Commander"
+    if re.search(r"\b(?:[2-9] women|multiple girls)\b", str(value.get("prompt", ""))):
+        return "Klukai and the other adult women the request describes"
+    return "Klukai alone"
 
 
 def environment(source=None):
@@ -107,7 +116,7 @@ def _image_block(raw: bytes) -> dict:
 def message(candidate: bytes, value: dict, references: dict) -> bytes:
     blocks = [_image_block(downscale_png(read_image(references["klukai"])))]
     blocks.append(_image_block(downscale_png(candidate)))
-    who = "Klukai and the Commander" if value.get("include_commander") else "Klukai alone"
+    who = expected_people(value)
     description = (
         f"\nCommander description (text only): {COMMANDER_TEXT_DESCRIPTION}"
         if value.get("include_commander")
@@ -198,11 +207,31 @@ def run(candidate: bytes, value: dict, references: dict, *, timeout: float) -> d
 _QUOTED = re.compile(r"""(?<!\w)['"\u2018\u201c].{1,60}?['"\u2019\u201d](?!\w)""")
 
 
+# Shown "avoid the open sky", the model painted it again in all 3 pictures rejected twice.
+# So a defect we can name becomes what should be there instead (xAI's guide: "Say the
+# thing you want to see"), and anything else stays a short description of the defect.
+_FIXES = (
+    (re.compile(r"\b(?:text|letter\w*|logo|signs?|signage|writing|caption|watermark|label|name.?tape)\b", re.I),
+     "Every surface is plain: signs, screens, labels and crates show only flat colour and simple shapes."),
+    (re.compile(r"\b(?:extra|additional|second|another|unexpected) (?:person|people|man|woman|figure|girl)\b", re.I),
+     "The people in the picture are only those named above."),
+    (re.compile(r"\b(?:photo\w*|realistic|semi-realistic|3d)\b", re.I),
+     "Flat cel-shaded 2D anime colour with clean ink lines on the figure and the background."),
+    (re.compile(r"\b(?:limbs?|fingers?|hands?|arms?|legs?|anatomy|proportions?)\b", re.I),
+     "Natural anatomy: two arms, two legs, five fingers on each hand, in a simple clear pose."),
+)
+
+
 def fix_hint(issues: list[dict]) -> str:
     """Major issues as a short, bounded correction for one re-render."""
-    major = [_QUOTED.sub("lettering", i["what"]) for i in issues
+    major = [i["what"] for i in issues
              if isinstance(i, dict) and i.get("severity") == "major" and isinstance(i.get("what"), str)][:3]
     if not major:
         return ""
-    return ("\n\nThe previous render was rejected by the checker. Avoid: "
-            + "; ".join(major))[:600]
+    fixes: list[str] = []
+    for what in major:
+        fix = next((fix for pattern, fix in _FIXES if pattern.search(what)), None)
+        line = fix or "Correct this: " + _QUOTED.sub("lettering", what)
+        if line not in fixes:
+            fixes.append(line)
+    return ("\n\nFor this picture: " + " ".join(fixes))[:600]

@@ -12,13 +12,15 @@ refused twice on 2026-10-24). So for fal the scene line is rewritten:
 - plain(): the redraw after a refusal. Also drops touch, bed and close-up cues and dresses
   both of them, so the same moment comes back fully clothed.
 
-Only the scene line changes; any other line (instructions, a checker's fix hint) is kept.
+Only the scene line changes, and his typed sentence above the setting line is left out, because
+it still asks for what this covers. Any other line (instructions, a checker's fix hint) is kept.
 Neither function adds a word the filter keys on.
 """
 
 from __future__ import annotations
 
 SCENE = "Scene and appearance: "
+SETTING = "Setting: "
 
 DROP = frozenset({
     "breasts", "small breasts", "medium breasts", "large breasts", "bare breasts", "cleavage",
@@ -57,6 +59,7 @@ TOUCH = frozenset({
     "close distance", "close together", "close-up", "close up", "lying down", "lying on bed",
     "lying in bed", "under covers", "bed", "on bed", "in bed", "dim lighting", "romantic",
     "bare shoulders", "bare legs", "off shoulder",
+    "large white towel wrapped around her", "soft white bedsheet wrapped around her",
 })
 
 
@@ -66,6 +69,7 @@ def _split(line: str) -> list[str]:
 
 def _rewrite(prompt: str, *, plain: bool) -> str:
     lines = prompt.split("\n")
+    lines = lines[next((i for i, line in enumerate(lines) if line.startswith(SETTING)), 0):]
     index = next((i for i, line in enumerate(lines) if line.startswith(SCENE)), None)
     if index is None:
         return prompt
@@ -74,7 +78,7 @@ def _rewrite(prompt: str, *, plain: bool) -> str:
     couple = "one man" in lowered or "couple" in lowered
     in_bed = any(tag in BED for tag in lowered)
     in_bath = any(tag in BATH for tag in lowered)
-    her = any(tag in HER_UNDRESS for tag in lowered)
+    her = any(tag in HER_UNDRESS or tag == "towel barely covering" for tag in lowered)
     his = couple and any(tag in HIS_UNDRESS for tag in lowered)
     kept: list[str] = []
     for tag, low in zip(tags, lowered):
@@ -107,7 +111,9 @@ def _rewrite(prompt: str, *, plain: bool) -> str:
             notes.append("Klukai is wrapped in a large soft blanket around her shoulders")
         if his and not (in_bed or in_bath):
             notes.append("the Commander wears a loose open-collared shirt")
-    notes.append("modest and tasteful, a tender moment between adults")
+    # "Between adults" on a solo picture invites a second person the checker then rejects.
+    notes.append("modest and tasteful, a tender moment between adults" if couple
+                 else "modest and tasteful")
     seen = {tag.lower() for tag in kept}
     kept += [note for note in notes if note.lower() not in seen]
     lines[index] = SCENE + "; ".join(kept) + "."

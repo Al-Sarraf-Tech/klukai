@@ -20,7 +20,7 @@ from typing import Any
 
 from . import extraction_llm
 from .image_prompts import needs_image
-from .image_provider import _asks_for_nudity
+from .image_provider import asks_for_nudity
 from .image_request_intent import resolve_picture_request
 
 logger = logging.getLogger(__name__)
@@ -185,7 +185,7 @@ def _subject(
     if not isinstance(raw, str):
         return ""
     subject = " ".join(raw.split())[:MAX_SUBJECT_CHARS]
-    if _asks_for_nudity(subject):
+    if asks_for_nudity(subject):
         # Only his own words can ask for it, never her replies or Haiku's.
         his_words = [content, str((last or {}).get("request", ""))]
         his_words += [
@@ -193,7 +193,7 @@ def _subject(
             for turn in prior_turns[-_TURNS_READ:]
             if turn.get("role") == "user"
         ]
-        if not any(_asks_for_nudity(words) for words in his_words):
+        if not any(asks_for_nudity(words) for words in his_words):
             return ""
     return subject
 

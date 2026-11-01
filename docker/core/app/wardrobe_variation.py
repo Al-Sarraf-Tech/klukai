@@ -52,6 +52,13 @@ CAMERA_CUES: tuple[str, ...] = (
     "upper body, candid, looking away",
 )
 
+# He asked to see a place: the frame has to hold it.
+PLACE_CAMERA_CUES: tuple[str, ...] = (
+    "full body, wide shot",
+    "full body, from side",
+    "cowboy shot, looking to the side",
+)
+
 SOLO_ACTIONS: tuple[str, ...] = (
     "walking, mid-stride",
     "leaning against wall, arms crossed",
@@ -146,6 +153,7 @@ def composition(
     seed: int | str = 0,
     indoor: bool | None = None,
     place_actions: Sequence[str] = (),
+    place_named: bool = False,
 ) -> str:
     """A candid camera cue and action for this render; parts the caller's own
     tags already set (framing, a pose) are left alone.
@@ -157,14 +165,18 @@ def composition(
     lower = framing_text.lower()
     parts: list[str] = []
     if not _FRAMING.search(lower):
-        parts.append(variation_rng(seed, "camera").choice(CAMERA_CUES))
+        cues = PLACE_CAMERA_CUES if place_named else CAMERA_CUES
+        parts.append(variation_rng(seed, "camera").choice(cues))
     if not _POSED.search(lower):
         if couple:
             pool: Sequence[str] = setting_pool(
                 COUPLE_ACTIONS, indoor, INDOOR_COUPLE_ACTIONS
             )
         elif scene in SCENE_ACTIONS:
-            pool = setting_pool(SCENE_ACTIONS[scene or ""], indoor)
+            # What this place is for comes first: aiming on a range, not a drink break.
+            pool = setting_pool(place_actions, indoor) or setting_pool(
+                SCENE_ACTIONS[scene or ""], indoor
+            )
         else:
             generic = setting_pool(SOLO_ACTIONS, indoor, INDOOR_SOLO_ACTIONS)
             pool = tuple(

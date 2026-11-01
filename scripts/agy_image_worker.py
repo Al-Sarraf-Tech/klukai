@@ -37,13 +37,15 @@ REQUEST_KEYS = {"request_id", "user_id", "prompt", "width", "height", "include_c
 # stays adult, solo and without sex acts. The permission text remains for that
 # rule. Owner decision 2026-10-30: the active Grok renderer refuses the flag
 # before any reference, ledger or CLI work, the same as fal's renderer, and
-# the grant is not a reason to skip the checker.
+# the grant is not a reason to skip the checker. Owner 2026-11-01: on Grok a grant
+# becomes the implied scene, as on fal, so the renderers never receive the flag.
 # Owner 2026-10-24: on fal, intimacy and nudity are implied only. Its filter
 # refuses anything it reads as sexual and this account cannot lift it, so fal's
 # scene is rewritten (implied_scene) and a grant becomes NUDITY_IMPLIED; a
 # refusal is redrawn once, fully clothed. Those renders are checked as usual.
 NUDITY_PROVIDERS = frozenset()
 IMPLIED_PROVIDERS = frozenset({"fal"})
+IMPLIED_ON_GRANT = frozenset({"grok"})  # Only a granted scene is rewritten here.
 NUDITY_IMPLIED = (
     "\n\nKeep it implied: a towel, a bedsheet, steam or the framing covers her body; only her "
     "shoulders, arms and legs show. Klukai is an adult woman in her mid-twenties; never depict "
@@ -161,21 +163,19 @@ def validate_request(value):
 def provider_request(provider, value, *, plain=False):
     """What one provider sees: the brief plus its nudity clause, never the flag itself.
 
-    fal gets the implied scene, or with plain=True the fully clothed redraw.
+    fal gets the implied scene, or with plain=True the fully clothed redraw. Grok
+    gets the same for a granted scene, and every other prompt as written.
     """
     request = {key: item for key, item in value.items() if key != "nudity"}
     prompt = value["prompt"]
-    if provider == "grok" and value.get("nudity") is True:
-        # The renderer refuses this flag before references or the attempt ledger.
-        request["nudity"] = True
-        request["prompt"] = prompt
-        return request
-    if provider in IMPLIED_PROVIDERS:
+    granted = value.get("nudity") is True
+    implied = provider in IMPLIED_PROVIDERS or (granted and provider in IMPLIED_ON_GRANT)
+    if implied:
         prompt = (implied_scene.plain if plain else implied_scene.implied)(prompt)
-    if value.get("nudity") is True:
+    if granted:
         if provider in NUDITY_PROVIDERS:
             prompt += NUDITY_PERMITTED
-        elif provider in IMPLIED_PROVIDERS:
+        elif implied:
             # The plain redraw already dresses her.
             prompt += "" if plain else NUDITY_IMPLIED
         else:
@@ -394,12 +394,17 @@ class Worker:
                         if isinstance(error, GenerationPending):
                             # A paid request may still exist. Only observation may follow.
                             return 409, {"status": "pending"}
-                        if (isinstance(error, ContentRefused) and provider in IMPLIED_PROVIDERS
-                                and not plain and REQUEST_BUDGET - (time.monotonic() - started)
+                        # xAI and the CLI give no reason, so a granted picture that fails
+                        # outright is treated the same way.
+                        refused = (isinstance(error, ContentRefused) and provider in IMPLIED_PROVIDERS) or (
+                            value.get("nudity") is True and provider in IMPLIED_ON_GRANT
+                            and not isinstance(error, ProviderUnavailable))
+                        if (refused and not plain and REQUEST_BUDGET - (time.monotonic() - started)
                                 >= RENDER_RESERVE + CHECK_TIMEOUT):
                             # Refused before anything was drawn: the same moment once
                             # more, fully clothed, as its own attempt.
-                            print(f"{provider} attempt {index} content_refused: {str(error)[:160]}; "
+                            reason = str(error)[:160] if isinstance(error, RendererError) else "withheld"
+                            print(f"{provider} attempt {index} content_refused: {reason}; "
                                   "redrawing it fully clothed", file=sys.stderr, flush=True)
                             self.fail_attempt(value["request_id"], index, "content_refused", False)
                             plain = True

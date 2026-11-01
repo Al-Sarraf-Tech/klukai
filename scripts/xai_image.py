@@ -2,7 +2,8 @@
 
 Her portrait from the repo goes up as a data URI on every edit. Text-only
 generation drops her cap, collar, and puts the tear on the wrong side. The
-Commander stays text. A nudity grant is refused before any spend. Failure
+Commander stays text. The worker turns a grant into the implied scene, so the
+flag never arrives; if it did, it is refused before any spend. Failure
 falls back to the account CLI. The checker is grok-4.7 vision at low effort,
 with the CLI checker if that call fails.
 """
@@ -162,10 +163,10 @@ def check_with_fallback(candidate: bytes, value: dict, references: dict, *, time
 
 
 def _check(candidate: bytes, value: dict, spend, timeout: float) -> tuple[dict, float]:
-    from claude_image_check import RUBRIC, validate_verdict
+    from claude_image_check import RUBRIC, expected_people, validate_verdict
 
     portrait = _portrait()
-    who = "Klukai and the Commander" if value.get("include_commander") else "Klukai alone"
+    who = expected_people(value)
     payload = {
         "model": spend.CHAT_MODEL,
         "reasoning_effort": "low",

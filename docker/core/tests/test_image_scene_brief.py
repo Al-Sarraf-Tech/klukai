@@ -830,7 +830,7 @@ class TestBriefOutputs:
         inside = _brief("draw us in the kitchen")
         assert inside.sentence().startswith("Setting: Indoors - a home kitchen")
         assert "stays indoors" in inside.sentence()
-        assert sc.INDOOR_AVOID in inside.avoid()
+        assert inside.avoid() == ""
         out = _brief("draw us at the park in the rain")
         assert out.sentence().startswith("Setting: Outdoors - a green park")
         assert out.sentence().endswith("overcast.")

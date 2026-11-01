@@ -190,12 +190,15 @@ detailed text description; the active renderer and checker never read or send
 his portrait image.
 
 Standing rules (owner, 2026-10-23):
-- Nudity need not be tasteful; explicit nudity is allowed when Klukai's own
-  intimacy gate grants it. It stays adult (never childlike), Klukai alone,
-  never with the Commander reference (a real person's likeness), no sex acts.
-  Character intimacy controls are unchanged. The current renderer does not
-  support the nudity grant: it refuses that flag before any private or paid
-  work and always keeps provider safety checks enabled.
+- Risqué outfits and implied nudity are allowed past Klukai's own intimacy gate
+  (owner, 2026-11-01: "she can also wear more risque outfits and implied nudity is
+  possible too"). A nudity grant becomes an implied picture, covered by a towel or
+  sheet, not an explicit one, and the explicit `OUTFIT_MAP` entries are not drawn on
+  any route. It stays adult (never childlike), Klukai alone, never with the Commander
+  reference (a real person's likeness), no sex acts. Nothing intimate is drawn with any
+  other character: a squad character named beside it declines the picture, and group
+  pictures are clothed. Character intimacy controls are unchanged. Renderers keep
+  refusing the nudity flag as a backstop and keep provider safety checks enabled.
 - **On fal, intimacy and nudity are implied only** (owner, 2026-10-24: "make it
   implied nudity ... make sure it doesn't trip the flag"). fal refuses anything
   its classifier reads as sexual (`content_policy_violation`, category `sexual`),

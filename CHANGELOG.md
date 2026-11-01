@@ -14,6 +14,20 @@ in `docs/superpowers/plans/`.
 
 ### Fixed
 
+- Nothing intimate is ever drawn with another character. Squad entries, some describing
+  petite characters, could share a picture with lingerie, bed or kiss tags, because
+  those tags never checked who else was in it. A request naming a squad character beside
+  anything intimate is now declined, group pictures are always clothed, body-shape tags
+  no longer reach the model, and the checker rejects anyone who looks underage.
+- A nudity request past her intimacy gate now draws an implied picture of Klukai alone,
+  covered by a towel or sheet (owner, 2026-11-01). On the xAI route it failed every
+  time. The explicit `OUTFIT_MAP` entries are no longer drawn on any route.
+- Her picture prompts ask for what should be there. A retry says what the picture needs
+  rather than repeating the defect, which 3 of 3 retries had painted again. Render terms
+  that pull towards a 3D look are gone, along with duplicate tags and words the model
+  would paint as lettering. A place he names gets a frame wide enough to hold it. Her
+  tear mark and character tag match canon. His typed words reach the model cleaned, and
+  a bare "draw it" uses the subject from the chat.
 - She draws when he asks. Keyword rules caught 155 of 444 realistic requests and
   fired on 49 of 94 ordinary sentences ("draw the curtains"). Claude Haiku at low
   effort now reads any message that could be a request, in context, so "yes" after

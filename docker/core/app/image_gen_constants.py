@@ -39,8 +39,8 @@ SFW_NEGATIVE_TAGS = (
 # Hairstyle is NOT here: it changes per outfit (ponytail on duty, down in the
 # wedding and maid outfits), so each wardrobe entry's image_tags carries it.
 KLUKAI_IDENTITY = (
-    "1girl, hk416 \\(girls' frontline\\), silver hair, green eyes, very long hair, "
-    "teardrop facial mark, cross hair ornament, girls' frontline, slim waist, athletic body, toned, slender figure, "
+    "1girl, klukai \\(girls' frontline 2\\), silver hair, green eyes, very long hair, "
+    "teardrop facial mark, cross hair ornament, slim waist, athletic body, toned, slender figure, "
     "long legs, beautiful detailed eyes, light blush, detailed skin, "
     "perfect anatomy, delicate collarbone, medium breasts, elegant neck, "
     "soft lips, detailed face, expressive eyes, eyelashes"
@@ -471,6 +471,9 @@ SCENE_OUTFIT_KEYWORDS: tuple[str, ...] = (
     "sleeping",
 )
 INTIMATE_MIN_LEVEL = 8
+EXPLICIT_OUTFIT_KEYS = frozenset(
+    {"sex", "fuck", "naked", "nude", "topless", "after sex", "orgasm", "shower"}
+)
 INTIMATE_OUTFIT_KEYS = frozenset(
     {"bed", "sleep", "morning", "bath", "underwear", "lingerie"}
 )

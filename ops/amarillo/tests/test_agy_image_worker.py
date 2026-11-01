@@ -689,7 +689,7 @@ def test_rejected_render_is_redone_once_with_a_fix_hint(worker, setup_files):
         status, _, data = request(path, value)
     assert (status, data) == (200, PNG)
     assert prompts[0] == value["prompt"]
-    assert prompts[1].startswith(value["prompt"]) and "six fingers on her left hand" in prompts[1]
+    assert prompts[1].startswith(value["prompt"]) and "Natural anatomy" in prompts[1]
     state = setup_files[1]
     assert attempts_of(state, value["request_id"]) == [
         (0, "grok", "failed", "check_rejected"), (1, "grok", "completed", None)]
@@ -844,24 +844,47 @@ def test_an_unknown_rotation_is_refused(worker, setup_files):
             pass
 
 
-def test_granted_nudity_is_refused_by_grok_before_review(worker, setup_files):
-    """The flag reaches the renderer, which refuses it; the checker never sees a render."""
-    from agy_art_runtime import RuntimeError as RendererError
-
-    seen_prompts, checked = [], []
+def test_a_grant_reaches_grok_as_the_implied_scene_and_is_checked(worker, setup_files):
+    """Owner 2026-11-01: implied, as on fal. The flag never reaches the renderer, which still refuses it."""
+    seen, checked = [], []
 
     def grok(value, references):
-        seen_prompts.append(value)
-        raise RendererError("Nudity rendering is unsupported; provider safety checks stay enabled")
+        seen.append(value)
+        return PNG
 
     value = payload(prompt="Klukai bathing in an onsen", nudity=True)
     with running(worker, setup_files, providers=[("grok", grok)],
                  checker=scripted_checker({"verdict": "pass", "issues": []}, seen=checked)) as path:
-        assert request(path, value)[0] == 502
-    (sent,) = seen_prompts
-    assert sent["nudity"] is True
+        assert request(path, value)[0] == 200
+    (sent,) = seen
+    assert "nudity" not in sent and sent["prompt"].endswith(worker.NUDITY_IMPLIED)
     assert worker.NUDITY_PERMITTED not in sent["prompt"]
-    assert checked == []
+    assert len(checked) == 1 and checked[0][1] == sent["prompt"]
+
+
+def test_grok_prompts_without_a_grant_are_not_rewritten(worker, setup_files):
+    """Risque outfits past the gate stay as listed; only a grant is covered."""
+    value = {"prompt": "Scene and appearance: one woman; black lace lingerie.", "include_commander": False}
+    assert worker.provider_request("grok", value)["prompt"] == value["prompt"]
+
+
+def test_a_granted_grok_picture_that_fails_outright_comes_back_clothed_once(worker, setup_files):
+    from agy_art_runtime import RuntimeError as RendererError
+
+    seen = []
+
+    def grok(value, references):
+        seen.append(value["prompt"])
+        if len(seen) == 1:
+            raise RendererError("the image tool returned nothing")
+        return PNG
+
+    prompt = "Scene and appearance: one woman; large white towel wrapped around her; steam."
+    with running(worker, setup_files, providers=[("grok", grok)]) as path:
+        assert request(path, payload(prompt=prompt, nudity=True))[0] == 200
+    first, second = seen
+    assert "towel" in first and "Klukai is fully clothed" in second
+    assert "large white towel" not in second and worker.NUDITY_IMPLIED not in second
 
 
 def test_other_providers_get_the_covered_version_and_are_checked(worker, setup_files):

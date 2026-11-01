@@ -299,12 +299,26 @@ async def background_image_gen(
             from .image_gen import detect_squad_members
 
             squad_members = detect_squad_members(user_request)
-        couple = is_couple_scene(user_request) and commander_reference_allowed(user_id)
+            from .image_provider import intimate_with_others
+
+            if intimate_with_others(user_request):
+                await ws.send_proactive(
+                    user_id, "...Leave my squad out of that, Commander.", persist=False
+                )
+                await ws.send(user_id, {"type": "thinking", "content": ""})
+                return
+        # A group picture is Klukai and the squad; the brief and the checker expect that.
+        couple = (
+            is_couple_scene(user_request)
+            and commander_reference_allowed(user_id)
+            and not squad_members
+        )
 
         # Get affection level for mood-aware prompts
         aff_state = await affection.get_state(user_id)
         aff_level = aff_state.level
 
+        from .image_provider import implied_cover, nudity_allowed
         from .image_scene import turns_from_context
         from .wardrobe_variation import derive_seed
 
@@ -322,6 +336,12 @@ async def background_image_gen(
         from . import wardrobe as _wardrobe
 
         costume = await render_costume(user_id, aff_level)
+        # Only his own words can ask for it, never her replies.
+        granted = use_agy and nudity_allowed(
+            user_request,
+            intimate=aff_level >= INTIMATE_MIN_LEVEL,
+            include_commander=couple,
+        )
         full_prompt = build_prompt(
             scene_tags,
             couple=couple,
@@ -331,7 +351,10 @@ async def background_image_gen(
             costume=costume,
             costume_pinned=_wardrobe.granted_request_for(user_id, costume),
             request=user_request,
+            mood=None,  # "Calm composed expression" sat over whatever he asked for.
             setting=brief,
+            cover=implied_cover(user_request) if granted else None,
+            pose="upper body" if granted else None,
             # A new turn is a new picture plan, not this sentence's old one.
             variation_seed=derive_seed(
                 user_request, brief.key, *(t.get("content", "") for t in history)
@@ -352,14 +375,24 @@ async def background_image_gen(
                 explicit_request_id,
                 fulfill_account_image,
             )
-            from .image_provider import cloud_prompt, nudity_allowed
+            from .image_provider import asks_for_nudity, cloud_prompt, plain_request
 
             described = cloud_prompt(
-                full_prompt,
-                sfw=aff_level < INTIMATE_MIN_LEVEL,
+                # The setting line says this once already.
+                full_prompt.removesuffix(f", {brief.tags()}"),
+                # Rank 1: nobody else is ever in a picture without the clothed line.
+                sfw=aff_level < INTIMATE_MIN_LEVEL or bool(squad_members),
                 negative_extra=avoid,
             )
-            full_prompt = f"{user_request}\n\n{brief.sentence()}\n\n{described}"
+            # Words asking for what this picture will not draw never reach the model.
+            said = (
+                ""
+                if asks_for_nudity(user_request) and not granted
+                else plain_request(user_request)
+            )
+            full_prompt = "\n\n".join(
+                p for p in (said, brief.sentence(), described) if p
+            )
             # Claim the original sentence and externally supplied place using
             # elapsed journal age; a wall-clock bucket can split a two-second repeat.
             repeat_key = explicit_request_id(
@@ -386,12 +419,7 @@ async def background_image_gen(
                 include_commander=couple,
                 repeat_key=repeat_key,
                 archive_context=archive_context,
-                # Only his own words can ask for it, never her replies.
-                nudity=nudity_allowed(
-                    user_request,
-                    intimate=aff_level >= INTIMATE_MIN_LEVEL,
-                    include_commander=couple,
-                ),
+                nudity=granted,
             )
             img_bytes = outcome.get("image")
         else:

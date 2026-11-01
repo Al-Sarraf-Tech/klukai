@@ -22,6 +22,7 @@ from app.image_gen_constants import (
     OUTFIT_MAP,
     INTIMATE_MIN_LEVEL,
     INTIMATE_OUTFIT_KEYS,
+    EXPLICIT_OUTFIT_KEYS,
     QUALITY_TAGS,
     SCENE_OUTFIT_KEYWORDS,
     SFW_NEGATIVE_TAGS,
@@ -191,10 +192,20 @@ def needs_image(message: str) -> bool:
     )
 
 
+_ABOUT_HER = re.compile(r"\b(?:yourself|just you|only you|you alone)\b")
+_NAMES_HIM = re.compile(
+    r"\b(?:us|we|our|together|both of us|with me|next to me|beside me|close to me|"
+    r"hold me|carry me|take care of me)\b"
+)
+
+
 def is_couple_scene(text: str) -> bool:
-    """Detect if the request is for a scene with both Klukai and the Commander."""
+    """Detect if the request is for a scene with both Klukai and the Commander.
+    "Draw yourself in bed" asks for her alone, whatever else the sentence says."""
 
     lower = text.lower()
+    if _ABOUT_HER.search(lower) and not _NAMES_HIM.search(lower):
+        return False
     return any(
         re.search(r"\b" + re.escape(kw) + r"\b", lower) for kw in COUPLE_KEYWORDS
     )
@@ -206,11 +217,27 @@ def is_landscape(text: str) -> bool:
     return any(kw in lower for kw in LANDSCAPE_KEYWORDS)
 
 
+# For Klukai alone. SQUAD_KEYWORDS describes some of them as petite, and a tag in a list
+# binds to nobody, so nothing like this may share a prompt with them.
+_RISQUE_OUTFIT = re.compile(
+    r"\b(?:lingerie|bra|panties|negligee|nightgown|camisole|slip dress|garter belt|bikini|"
+    r"swimsuit|sarong|towel barely covering|apron only|wet skin|bare legs|no pants|see-through|"
+    r"sheer|seductive|nude|naked|topless)\b",
+    re.I,
+)
+_HIS_RISQUE = re.compile(r"\b(?:shirtless|bare chest|boxers|nude|towel)\b", re.I)
+# Solo pictures: these read as someone else in the frame.
+_TOGETHER_TAGS = frozenset({"together", "close", "close distance"})
+
+
 def _select_outfit(context: str, outfit_map: dict[str, str], default: str) -> str:
-    """Pick the best outfit from a map based on conversation context keywords."""
+    """Pick the best outfit from a map based on conversation context keywords, as
+    whole words: "train" is not rain, and "gloves" is not love."""
+    from .image_scene import _keyword_pattern
+
     lower = context.lower()
     for keyword, outfit in outfit_map.items():
-        if keyword in lower:
+        if _keyword_pattern(keyword).search(lower):
             return outfit
     return default
 
@@ -233,10 +260,12 @@ def _explicit_scene(text: str) -> bool:
 
 
 def _outfit_map_for(affection_level: int) -> dict[str, str]:
-    """OUTFIT_MAP minus the intimate outfits below the intimacy gate."""
+    """OUTFIT_MAP without the explicit entries, which no route draws (a grant becomes an
+    implied picture instead), and without the intimate outfits below the intimacy gate."""
+    allowed = {k: v for k, v in OUTFIT_MAP.items() if k not in EXPLICIT_OUTFIT_KEYS}
     if affection_level >= INTIMATE_MIN_LEVEL:
-        return OUTFIT_MAP
-    return {k: v for k, v in OUTFIT_MAP.items() if k not in INTIMATE_OUTFIT_KEYS}
+        return allowed
+    return {k: v for k, v in allowed.items() if k not in INTIMATE_OUTFIT_KEYS}
 
 
 def build_prompt(
@@ -245,7 +274,7 @@ def build_prompt(
     affection_level: int = 0,
     context: str = "",
     squad_members: list[str] | None = None,
-    mood: str = "composed",
+    mood: str | None = "composed",
     time_of_day: str | None = None,
     costume: str | None = None,
     request: str | None = None,
@@ -254,6 +283,7 @@ def build_prompt(
     variation_seed: int | str | None = None,
     costume_pinned: bool | None = None,
     setting: SceneBrief | None = None,
+    cover: str | None = None,
 ) -> str:
     """Build the full positive prompt with quality tags, LoRA trigger, and character identities.
 
@@ -293,6 +323,8 @@ def build_prompt(
             "... setting" words; ``time_of_day`` is ignored. Without one, the
             picture's own tags may still say indoors (her POV), and then the
             action and the hour's light stay indoors too.
+        cover: What covers her in an implied picture (image_provider.implied_cover),
+            replacing every other outfit. Only a grant sets it, so only Klukai alone.
 
     Who decides what she wears, highest first: an outfit he asks for in
     ``request`` and she has on > an explicit bath/bed scene (at the intimacy
@@ -303,12 +335,22 @@ def build_prompt(
 
     from . import image_scene
 
+    others = bool(squad_members) or bool(
+        detect_squad_members(f"{scene_tags} {request or ''}")
+    )
     # Add affection-aware mood tags
     mood_tags = AFFECTION_MOOD_TAGS.get(affection_level, "") if affection_tags else ""
+    if others:
+        mood_tags = ""
     if mood_tags and setting is not None:
-        # "military setting" must not move a picture out of his bedroom.
+        # "military setting" must not move a picture out of his bedroom, and a firing
+        # range is not "intimate" just because the bond is.
         mood_tags = ", ".join(
-            t for t in mood_tags.split(", ") if not t.endswith(" setting")
+            t
+            for t in mood_tags.split(", ")
+            if not t.endswith(" setting")
+            and (couple or t not in _TOGETHER_TAGS)
+            and (t != "intimate" or setting.key in image_scene._BED_PLACES)
         )
     if mood_tags:
         parts.append(mood_tags)
@@ -372,6 +414,8 @@ def build_prompt(
     honoured = named is not None and named == costume_id
     explicit = (
         not honoured
+        and not couple
+        and not others
         and affection_level >= INTIMATE_MIN_LEVEL
         and _explicit_scene(request if request is not None else outfit_context)
     )
@@ -413,6 +457,11 @@ def build_prompt(
             outfit_context, _outfit_map_for(affection_level), KLUKAI_DEFAULT_OUTFIT
         )
 
+    if others and _RISQUE_OUTFIT.search(klukai_outfit):
+        klukai_outfit = KLUKAI_DEFAULT_OUTFIT
+    if cover:
+        klukai_outfit = cover
+
     # A candid camera/action cue, so pictures are not one posed portrait —
     # never for Live Portrait or an explicit intimate scene, and a caller's own
     # pose always wins.
@@ -426,6 +475,7 @@ def build_prompt(
             seed=seed,
             indoor=indoor,
             place_actions=setting.place.actions if setting is not None else (),
+            place_named=setting is not None and setting.source == image_scene.REQUEST,
         )
     else:
         composition = ""
@@ -433,7 +483,11 @@ def build_prompt(
     if couple:
         commander_outfit = _select_outfit(
             outfit_context,
-            COMMANDER_OUTFIT_MAP,
+            {
+                k: v
+                for k, v in COMMANDER_OUTFIT_MAP.items()
+                if not _HIS_RISQUE.search(v)
+            },
             (setting.commander if setting is not None else None)
             or COMMANDER_DEFAULT_OUTFIT,
         )

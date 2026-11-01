@@ -176,6 +176,21 @@ def cloud_images_ready() -> bool:
 
 # Image models paint a name they are given as lettering. Every path to the image
 # model passes through _plain_description, including words he or she typed.
+# Diffusion words with no place in a prompt for a 2D anime render. The render terms pull
+# towards the photorealistic or 3D look the checker rejects, and a body-shape word from a
+# squad entry must not make anyone read as young. "Palette, film grain, and styling come
+# after" the subject (xAI's prompting guide).
+_NOT_FOR_THE_MODEL = frozenset(
+    {
+        "masterpiece", "best quality", "absurdres", "highres", "very aesthetic",
+        "ultra-detailed", "beautiful lighting", "depth of field", "sharp focus",
+        "cinematic composition", "vivid colors", "professional", "high resolution",
+        "intricate details", "ambient occlusion", "volumetric lighting", "film grain",
+        "detailed skin", "perfect anatomy", "detailed face", "beautiful detailed eyes",
+        "expressive eyes", "petite", "small build", "short stature", "seductive",
+        "seductive pose", "busty", "large breasts", "garter straps",
+    }
+)  # fmt: skip
 _ELMO_NAME = re.compile(r"\b(?:the\s+)?elmo(?:(?P<possessive>['’]s))?\b", re.I)
 
 
@@ -200,15 +215,38 @@ def _plain_description(text: str) -> str:
     text = re.sub(r"\b1boy\b", "one man", text)
     text = re.sub(r"\b(\d+)girls\b", r"\1 women", text)
     text = re.sub(r"\b(\d+)boys\b", r"\1 men", text)
-    tags = [tag.strip() for tag in text.split(",")]
-    tags = [
-        tag
-        for tag in tags
-        if tag
-        and tag.lower() not in {"masterpiece", "best quality", "absurdres", "highres"}
-        and not re.fullmatch(r"score \d+(?: up)?", tag, flags=re.I)
-    ]
-    return "; ".join(tags)
+    kept: dict[str, str] = {}
+    for tag in (tag.strip() for tag in text.split(",")):
+        low = tag.lower()
+        if (
+            tag
+            and low not in _NOT_FOR_THE_MODEL
+            and not re.fullmatch(r"score \d+(?: up)?", tag, flags=re.I)
+        ):
+            kept.setdefault(low, tag)
+    return "; ".join(kept.values())
+
+
+# "draw it" names nothing; picture_intent's retry marker is for the journal only.
+_BARE_REFERENCE = re.compile(
+    r"^\W*(?:please\s+|can you\s+|could you\s+|would you\s+|will you\s+)*"
+    r"(?:draw|sketch|paint|render|illustrate|doodle|show me)\s+(?:it|that|this|one|something)"
+    r"(?:\s+(?:for me|for us|please))*\W*$",
+    re.I,
+)
+_RETRY_MARKER = re.compile(r"\n\nNew version \d+\.\s*$")
+_SUBJECT_LINE = re.compile(r"\n\nSubject: (.+)")
+
+
+def plain_request(text: str) -> str:
+    """His request as the image model reads it: what to show, not the order to draw it."""
+    text = _RETRY_MARKER.sub("", text)
+    subject = _SUBJECT_LINE.search(text)
+    if subject:
+        text = subject.group(1)
+    elif _BARE_REFERENCE.match(text):
+        return ""
+    return _ELMO_NAME.sub(_unnamed_base, text).strip()
 
 
 # Owner decision 2026-10-19: tasteful nudity of Klukai, alone, past the intimacy
@@ -230,6 +268,18 @@ _NUDITY_REFUSED = re.compile(
 )
 
 
+_BATHING = re.compile(
+    r"\b(?:bath|bathing|bathtub|onsen|hot springs?|shower(?:ing)?)\b", re.I
+)
+
+
+def implied_cover(request: str) -> str:
+    """What covers her when a grant becomes an implied picture."""
+    if _BATHING.search(request):
+        return "large white towel wrapped around her, hair down, bare shoulders"
+    return "soft white bedsheet wrapped around her, hair down, bare shoulders"
+
+
 def _not_alone(text: str) -> bool:
     """Another girl is named or tagged ("Groza", "2girls", "multiple girls")."""
     from .image_gen_constants import SQUAD_KEYWORDS
@@ -244,13 +294,27 @@ def _not_alone(text: str) -> bool:
     )
 
 
-def _asks_for_nudity(text: str) -> bool:
+def asks_for_nudity(text: str) -> bool:
     asked = False
     for match in _NUDITY_CUE.finditer(text):
         if _NUDITY_REFUSED.search(text[max(0, match.start() - 60) : match.start()]):
             return False
         asked = True
     return asked
+
+
+_INTIMATE_WORDS = re.compile(
+    r"\b(?:lingerie|underwear|bras?|panties|bikinis?|swimsuits?|towels?|beds?|sexy|lewd|"
+    r"kiss(?:es|ed|ing)?|cuddl(?:e|es|ed|ing)|make out|making out)\b",
+    re.I,
+)
+
+
+def intimate_with_others(text: str) -> bool:
+    """Another character is named alongside anything intimate: nothing is drawn."""
+    return _not_alone(text) and bool(
+        _NUDITY_CUE.search(text) or _INTIMATE_WORDS.search(text)
+    )
 
 
 def nudity_allowed(
@@ -262,7 +326,7 @@ def nudity_allowed(
         and not include_commander
         and isinstance(text, str)
         and not _not_alone(text)
-        and _asks_for_nudity(text)
+        and asks_for_nudity(text)
     )
 
 
@@ -272,15 +336,14 @@ def cloud_prompt(
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 32_000:
         raise ImageProviderError("Invalid image description")
     parts = [
-        "Create one polished anime illustration of the described scene. "
-        "Use the supplied character references to preserve each character's face, "
-        "hair, eyes and distinctive markings. Follow the described clothing and "
-        "pose; keep different characters visually distinct.",
+        "One polished anime illustration of the scene below, in its clothing and pose; "
+        "any other characters stay visually distinct.",
         "Scene and appearance: " + _plain_description(prompt) + ".",
     ]
     if sfw:
         parts.append(
-            "Keep every character fully clothed, with no nudity or exposed intimate anatomy."
+            "Keep every character fully clothed in the outfit listed (swimwear or a leotard "
+            "counts as clothed), with no nudity or exposed intimate anatomy."
         )
     if negative_extra:
         if not isinstance(negative_extra, str) or len(negative_extra) > 4000:

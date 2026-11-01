@@ -58,7 +58,6 @@ ELMO = "a colossal armored land vehicle on tank treads"
 # armored viewports", it painted a desert through them. The rooms have no windows.
 ELMO_INTERIOR = "windowless riveted steel interior of an armored land base"
 ELMO_AVOID = "ship, boat, ocean, sea, harbor, naval vessel"
-INDOOR_AVOID = "outdoor scenery, open sky"
 
 _HOME = COMMANDER_OUTFIT_MAP["home"]
 _CASUAL = COMMANDER_OUTFIT_MAP["casual"]
@@ -283,7 +282,7 @@ PLACES: dict[str, Place] = {
             True,
             "mall, shopping mall, the store, a store, the shops, shopping, supermarket, "
             "grocery store, groceries, bookstore, convenience store, the market",
-            "a shopping mall, storefronts, polished floors",
+            "a shopping mall, glass shop fronts with plain awnings, polished floors",
             wardrobe="cafe",
             light="bright store lighting",
             window="the storefront glass",
@@ -385,7 +384,7 @@ PLACES: dict[str, Place] = {
             False,
             "city, the city, downtown, the street, the streets, city street, street, "
             "town, city center, city centre, main street, sidewalk, crosswalk, chicago",
-            "a city street, shopfronts, sidewalk, passing traffic",
+            "a city street, shops with plain awnings, sidewalk, passing traffic",
             commander=_CASUAL,
             actions=("walking, mid-stride", "hands in pockets, waiting at a crosswalk"),
         ),
@@ -523,7 +522,7 @@ PLACES: dict[str, Place] = {
             True,
             "command deck, command center, command centre, command room, control room, "
             "command bridge, nav console, tactical room, ops room, operations room, war room",
-            f"a command center, {ELMO_INTERIOR}, banks of glowing tactical monitors, "
+            f"a command center, {ELMO_INTERIOR}, banks of monitors glowing with abstract maps, "
             "holographic map table",
             specificity=2,
             **{**_ELMO_INSIDE, "light": "glow of tactical monitors"},
@@ -549,11 +548,15 @@ PLACES: dict[str, Place] = {
             "the Elmo's firing range",
             True,
             "firing range, shooting range, the range, gun range, target practice",
-            f"the firing range, {ELMO_INTERIOR}, shooting lanes, paper targets, "
-            "ear protection on hooks",
+            f"an enclosed indoor firing range, {ELMO_INTERIOR}, steel lane dividers, "
+            "plain round paper targets, ear protection on hooks",
             specificity=2,
             wardrobe="training",
             **{**_ELMO_INSIDE, "light": "bright range lights"},
+            actions=(
+                "aiming a rifle down the lane, ear protection on",
+                "loading a magazine at the lane bench",
+            ),
         ),
         _place(
             "training_room",
@@ -581,7 +584,7 @@ PLACES: dict[str, Place] = {
             "the Elmo's rec room",
             True,
             "rec room, recreation room, game room, gaming room, arcade, pool table",
-            f"the rec room, {ELMO_INTERIOR}, worn couch, big screen with a game on, "
+            f"the rec room, {ELMO_INTERIOR}, worn couch, big screen glowing with abstract colour, "
             "scattered controllers",
             specificity=2,
             **{**_ELMO_INSIDE, "light": "glow of the big screen"},
@@ -597,7 +600,7 @@ PLACES: dict[str, Place] = {
             "logistics bay, supply bay, cargo bay, storage bay, supply room, storeroom, "
             "quartermaster",
             f"the logistics bay, {ELMO_INTERIOR}, stacked supply crates, shelving, "
-            "inventory terminals",
+            "a dark wall terminal",
             specificity=2,
             **_ELMO_INSIDE,
             actions=("checking a clipboard", "leaning against supply crates"),
@@ -617,7 +620,7 @@ PLACES: dict[str, Place] = {
             "the Tea Time counter",
             True,
             "tea counter, tea time counter, tea time, behind the counter, racing calm",
-            f"the Tea Time counter in a lounge, {ELMO_INTERIOR}, teapots and cups, "
+            f"a tea counter in a lounge, {ELMO_INTERIOR}, teapots and cups, "
             "warm pendant lights",
             specificity=2,
             wardrobe="tea",
@@ -639,7 +642,7 @@ PLACES: dict[str, Place] = {
             True,
             "your quarters, your room, your bedroom, your bed, your bunk, your place, "
             "her quarters, her room, quarters, bunk",
-            f"Klukai's quarters, {ELMO_INTERIOR}, neatly made bunk, small desk with a lamp, "
+            f"an officer's private quarters, {ELMO_INTERIOR}, neatly made bunk, small desk with a lamp, "
             "sketchbook",
             specificity=2,
             **{**_ELMO_INSIDE, "light": "dim desk lamp"},
@@ -1169,8 +1172,13 @@ class SceneBrief:
         weather = weather_tags(self.place, self.weather, indoor=self.indoor)
         text = f"Setting: {where} - {self.place.tags}; {light}"
         text += f"; {weather}." if weather else "."
-        if self.indoor:
-            text += " The whole picture stays indoors."
+        if self.indoor and self.place.window is None:
+            text += (
+                " The whole picture stays indoors: solid walls and a low ceiling "
+                "fill the background."
+            )
+        elif self.indoor:
+            text += " The whole picture stays indoors, with the room's walls in view."
         if self.place.elmo and not self.indoor:
             text += (
                 " The vehicle is a colossal armored mobile base on tank treads that "
@@ -1179,12 +1187,9 @@ class SceneBrief:
         return text
 
     def avoid(self) -> str:
-        parts = []
-        if self.indoor:
-            parts.append(INDOOR_AVOID)
-        if self.place.elmo:
-            parts.append(ELMO_AVOID)
-        return ", ".join(parts)
+        # Keep a constraint only for a specific object: "A long avoid list is easy to
+        # ignore, and it spends the prompt on objects that then show up anyway" (xAI).
+        return ELMO_AVOID if self.place.elmo and not self.indoor else ""
 
     def wardrobe_scene(self, request: str | None) -> str | None:
         """The scene she dresses for: his request's, when it fits the setting,

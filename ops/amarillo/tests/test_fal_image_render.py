@@ -667,3 +667,19 @@ def test_the_shared_brief_never_asks_for_sky():
     """Every renderer reads this. It contradicted indoor scenes and the checker failed them."""
     assert "sky" not in fal.BACKGROUND
     assert "buildings" not in fal.BACKGROUND
+
+
+@pytest.mark.parametrize(
+    ("words", "line"),
+    [
+        ("her at the range", "Only Klukai in the image"),
+        ("one woman; 2 women; multiple girls; the range", "all clearly adults, fully clothed"),
+    ],
+)
+def test_the_brief_asks_for_who_the_tags_describe(words, line):
+    assert line in fal.brief({"prompt": words})
+
+
+def test_the_tear_is_on_her_left_whichever_way_she_turns():
+    text = fal.brief({"prompt": "x"})
+    assert "under her left eye" in text and "appear only if the scene lists them" in text
