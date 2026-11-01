@@ -412,7 +412,7 @@ async def background_image_gen(
             )
             await ws.send_proactive(
                 user_id,
-                "...Visualization failed. Interference in the rendering pipeline. I'll try again later.",
+                "...Visualization failed. Interference in the rendering pipeline. Ask me again.",
                 persist=False,
             )
             await ws.send(

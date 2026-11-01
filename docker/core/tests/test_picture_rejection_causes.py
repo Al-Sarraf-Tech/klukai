@@ -101,3 +101,13 @@ def test_the_outside_still_says_it_is_a_land_vehicle_without_the_name():
     prompt = cloud_prompt(brief.sentence())
     assert "tank treads" in prompt and "dry land" in prompt
     assert "elmo" not in prompt.lower()
+
+
+def test_no_failed_picture_promises_a_retry_that_never_happens():
+    from pathlib import Path
+
+    app = Path(sc.__file__).parent
+    for name in ("background.py", "her_pov_pipeline.py"):
+        source = (app / name).read_text()
+        assert "Visualization failed" in source, name
+        assert "try again later" not in source, name
