@@ -20,6 +20,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import time
 import pytest
 
 import app.memory  # noqa: F401,E402  (settles the manager/mixin imports)
@@ -29,6 +30,17 @@ from app.memory_exchange import (  # noqa: E402
     recall_exchanges_with_recency,
     store_exchange,
 )
+
+
+
+@pytest.fixture
+def utc_clock(monkeypatch):
+    """In a zone's repeated daylight-saving hour, a naive "now" reads an hour old."""
+    monkeypatch.setenv("TZ", "UTC")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
 
 
 class _RecordingConn:
@@ -247,7 +259,7 @@ class TestRecallWithRecency:
         assert out[0]["final_score"] > out[1]["final_score"]
 
     @pytest.mark.asyncio
-    async def test_naive_legacy_timestamps_are_read_as_local_time(self):
+    async def test_naive_legacy_timestamps_are_read_as_local_time(self, utc_clock):
         """Old naive stamps must not crash the aware-UTC arithmetic."""
         obj = _self_with_recall([{
             "user_content": "x", "assistant_content": "y", "score": 0.5,
