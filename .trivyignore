@@ -1,0 +1,12 @@
+# Advisories accepted for the core image, each with a reason and an expiry.
+# Trivy fails the scan again on the expiry date. Debian 13 had no fix for these
+# when they were added (owner decision, 2026-11-01).
+
+# SQLite FTS5 heap overflow. It needs a detail=none FTS5 table and a prefix MATCH.
+# Neither the core nor any dependency uses FTS5; its only SQLite use is two local
+# ledger files with fixed SQL.
+CVE-2026-119373 exp:2026-12-01
+
+# Command injection in the sqlite3 shell's .recover command. The image ships the
+# library only, with no sqlite3 shell and no system shell.
+CVE-2026-119586 exp:2026-12-01

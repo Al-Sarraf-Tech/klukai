@@ -12,6 +12,13 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Security
+
+- The image scan accepts two SQLite advisories until 2026-12-01 (`.trivyignore`,
+  owner decision). Debian 13 has no fix yet and neither can be reached in the
+  core image: CVE-2026-119373 needs FTS5, which nothing uses, and CVE-2026-119586
+  is in the sqlite3 shell, which the image does not ship.
+
 ### Fixed
 
 - Her long-term memory gets back turns it lost. The exchange for a turn is
