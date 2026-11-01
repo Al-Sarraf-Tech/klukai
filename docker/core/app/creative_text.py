@@ -1,8 +1,8 @@
-"""Separately capped creative writing on the shared Grok account route.
+"""Separately capped creative writing on the shared background route.
 
 The legacy ``anthropic`` setting retains the dream/Her POV attempt cap. Every
-background model call uses Grok 4.7 at low effort and the shared daily cap.
-There is no Anthropic call. Failed attempts remain consumed.
+background model call goes through app/background_llm.py and the shared daily
+cap. Failed attempts remain consumed.
 """
 
 from __future__ import annotations

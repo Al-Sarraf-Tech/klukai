@@ -1,4 +1,4 @@
-"""Background text is account-login Grok 4.7 at low effort, capped and credential-safe."""
+"""The Grok CLI background call: account login, low effort, capped, credential-safe."""
 
 from __future__ import annotations
 
@@ -69,8 +69,8 @@ def test_utc_clock_is_aware():
 
 
 @pytest.mark.parametrize("value", [None, "local", "anthropic", "openai", ""])
-def test_provider_is_always_grok(monkeypatch, value):
-    # Whatever an old deployment still exports, background text is Grok.
+def test_provider_is_grok_while_claude_is_off(monkeypatch, value):
+    # Whatever an old deployment still exports, this switch cannot pick a model.
     if value is None:
         monkeypatch.delenv("KLUKAI_EXTRACTION_PROVIDER", raising=False)
     else:
@@ -263,10 +263,12 @@ async def test_oversized_response_rejected(remote, monkeypatch):
         await xl.complete("x", max_tokens=100, route="extraction")
 
 
-async def test_background_call_does_not_open_the_anthropic_breaker(remote, monkeypatch):
+async def test_the_cli_request_does_not_open_the_anthropic_breaker(remote, monkeypatch):
     transport(monkeypatch)
+    never = AsyncMock(side_effect=AssertionError("the CLI path sends no HTTP"))
+    monkeypatch.setattr(xl, "http_stream", never)
     assert await xl.complete("x", max_tokens=100, route="extraction") == '{"mood": "serene"}'
-    assert not hasattr(xl, "http_stream")
+    never.assert_not_called()
 
 
 async def test_telemetry_failure_never_fails_a_completed_call(remote, monkeypatch):

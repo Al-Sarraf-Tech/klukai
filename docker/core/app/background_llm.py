@@ -1,11 +1,12 @@
-"""One background-model route: account-login Grok, then the caller's safe default.
+"""One background-model route: Claude Haiku, the Grok CLI, then the safe default.
 
 Every non-interactive text/JSON call in the core goes through ``text()`` or
-``json_object()``. Owner decision 2026-10-31: that call is Grok 4.7 at low
-effort through the host CLI. ``KLUKAI_EXTRACTION_DAILY_LIMIT`` still reserves
-one UTC-day attempt before anything is sent. If Grok is unavailable, capped,
-fails or returns nothing usable, the caller gets its safe default. There is
-no Anthropic fallback and no local model.
+``json_object()``. Owner decision 2026-11-01: with Claude switched on, that call
+is Claude Haiku 5.5 at low effort. If Haiku fails or returns nothing usable, it
+goes to Grok 4.7 at low effort through the host CLI. Her POV stories try the xAI
+API before either. ``KLUKAI_EXTRACTION_DAILY_LIMIT`` reserves one UTC-day attempt
+before each request. If everything is unavailable, capped, fails or returns
+nothing usable, the caller gets its safe default. There is no local model.
 
 Never raises into the caller. A call that a higher-priority recall preempts
 returns the safe default too, unless the caller passes ``requeue=True`` (the
@@ -57,9 +58,8 @@ def _parsed_object(text: str) -> dict[str, Any] | None:
     return _usable_object(parse_json(text))
 
 
-# Her POV story and episode summaries. Extraction, compaction, promises and
-# the recall pick stay on the CLI. The pick's wait already covers measured
-# CLI startup, so it does not move to the API.
+# Her POV story and episode summaries try the xAI API first. Extraction,
+# compaction, promises and the recall pick do not use that key.
 _API_CALLERS = frozenset({"her_pov", "episode_summary"})
 
 
@@ -100,7 +100,50 @@ async def _from_api(
     return None, reason
 
 
-async def _haiku(
+async def _from_claude(
+    caller: str,
+    prompt: str,
+    *,
+    max_tokens: int,
+    system: str | None,
+    convert: Callable[[str], _T | None],
+    unusable: str,
+    report: CallReport,
+    role: str,
+    timeout: float | None,
+) -> _T | None:
+    """One Haiku request. None means the CLI takes the call."""
+    kwargs: dict[str, Any] = {"max_tokens": max_tokens, "route": caller}
+    if role != "background":
+        kwargs["role"] = role
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if system is not None:
+        kwargs["system"] = system
+    result: _T | None = None
+    try:
+        text = await extraction_llm.complete_claude(prompt, **kwargs)
+    except extraction_llm.ExtractionUnavailable:
+        outcome = "unavailable->cli"
+    except Exception as error:  # a background caller must never see a raise
+        logger.warning("Haiku %s failed (%s)", caller, type(error).__name__)
+        outcome = "failed->cli"
+    else:
+        result = convert(text)
+        outcome = "ok" if result is not None else f"{unusable}->cli"
+    report.provider, report.model = extraction_llm.provider(), extraction_llm.model()
+    report.outcome = outcome
+    logger.info(
+        "Background model: caller=%s provider=%s model=%s outcome=%s",
+        caller,
+        report.provider,
+        report.model,
+        outcome,
+    )
+    return result
+
+
+async def _from_cli(
     caller: str,
     prompt: str,
     *,
@@ -110,7 +153,7 @@ async def _haiku(
     timeout: float | None = None,
     requeue: bool = False,
 ) -> tuple[str | None, str]:
-    """One budgeted background request: (visible text or None, outcome)."""
+    """One budgeted Grok CLI request: (visible text or None, outcome)."""
     kwargs: dict[str, Any] = {"max_tokens": max_tokens, "route": caller}
     if role != "background":
         kwargs["role"] = role
@@ -127,10 +170,10 @@ async def _haiku(
     except extraction_llm.ExtractionUnavailable:
         return None, "unavailable"
     except extraction_llm.ExtractionLLMError as error:
-        logger.warning("Haiku %s failed: %s", caller, error)
+        logger.warning("Grok CLI %s failed: %s", caller, error)
         return None, "failed"
     except Exception as error:  # a background caller must never see a raise
-        logger.warning("Haiku %s failed (%s)", caller, type(error).__name__)
+        logger.warning("Grok CLI %s failed (%s)", caller, type(error).__name__)
         return None, "failed"
 
 
@@ -166,11 +209,26 @@ async def _route(
                 report.outcome,
             )
             return api_result
-    report.provider, report.model = extraction_llm.provider(), extraction_llm.model()
-    text, reason = await _haiku(
+    budget = haiku_max_tokens or haiku_budget(max_tokens)
+    if extraction_llm.uses_anthropic():
+        claude_result = await _from_claude(
+            caller,
+            prompt,
+            max_tokens=budget,
+            system=system,
+            convert=convert,
+            unusable=unusable,
+            report=report,
+            role=role,
+            timeout=timeout,
+        )
+        if claude_result is not None:
+            return claude_result
+    report.provider, report.model = "grok", extraction_llm.DEFAULT_MODEL
+    text, reason = await _from_cli(
         caller,
         prompt,
-        max_tokens=haiku_max_tokens or haiku_budget(max_tokens),
+        max_tokens=budget,
         system=system,
         role=role,
         timeout=timeout,

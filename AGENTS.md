@@ -13,7 +13,20 @@ The reply is buffered and validated before it is sent. A Haiku failure before
 any text (HTTP error, timeout, `max_tokens`, an empty reply) falls back to the
 Grok chat path below: the xAI API, then the CLI. Without both settings chat is
 Grok. Claude API calls are covered by the owner's paid Claude API authorization
-(2026-10-21). Background text is not routed through Haiku.
+(2026-10-21).
+
+**Claude Haiku 5.5 for background text (owner decision, 2026-11-01).** The Grok
+account's usage ran out on 2026-10-31 ("402 usage balance exhausted") and her
+memory stopped. Under the same two settings, background text (memory recall,
+extraction, promises, mood, the daily recap and the other background writers)
+uses `claude-haiku-5-5` at effort `low` with adaptive thinking
+(`app/extraction_llm.py`, `KLUKAI_EXTRACTION_MODEL` accepts only
+`claude-haiku-*` ids). A Haiku failure or unusable reply goes to the Grok CLI,
+then the caller's safe default. Each request reserves one attempt under the
+daily `KLUKAI_EXTRACTION_DAILY_LIMIT`, and token counts land in the ledger. It
+has its own breaker, `anthropic_extraction`, so it cannot trip chat's. Her POV
+stories and episode summaries still try the xAI API first. Without both
+settings, background text is the Grok CLI alone.
 
 **xAI API for chat and pictures (owner decision, 2026-10-31; chat is now the
 Haiku fallback).** Chat replies and picture generation use the prepaid key in `KLUKAI_XAI_API_KEY`, loaded from
@@ -25,8 +38,8 @@ reference, aspect `2:3`, resolution `2k`, quality `medium`, and `b64_json`.
 Do not use the retired grok-imagine quality or pro image model ids. Every
 edit sends `docs/images/klukai-portrait.png` as `images[].url`. The picture
 checker is grok-4.7 vision on the API at low effort, with the CLI checker if
-that call fails. Background memory (recall, extraction, promises, mood) stays
-on the CLI with `disable_api_key_auth=true`. `KLUKAI_CHAT_BACKEND` and
+that call fails. The CLI runs with `disable_api_key_auth=true`.
+`KLUKAI_CHAT_BACKEND` and
 `KLUKAI_IMAGE_BACKEND` are `api` or `cli`. The default is `api` when the key
 is present. A missing key, the daily USD cap (`KLUKAI_API_DAILY_USD_CAP`,
 default 5; chat uses `usage.cost_in_usd_ticks` / 10^10, each 2k edit is about
@@ -34,10 +47,9 @@ $0.09, a vision check about $0.007), or an API failure before any chat token
 falls back to the CLI. Fal stays off. Chat sends a stable `x-grok-conv-id`.
 Fish voice is unchanged.
 
-**Grok account login (owner decision, 2026-10-30, still the CLI fallback and
-the background path).** Background text, the picture checker, and the chat
-and picture fallbacks run through the official Grok CLI on the owner's account
-login. `disable_api_key_auth = true` on that path. The Claude image checker
+**Grok account login (owner decision, 2026-10-30, now the CLI fallback).** The
+picture checker's backup, and the chat, picture and background fallbacks run
+through the official Grok CLI on the owner's account login. `disable_api_key_auth = true` on that path. The Claude image checker
 stays in the tree and is not selected; chat is Haiku (above). See the section
 below.
 Do not reintroduce LM Studio, Dominus voice, ComfyUI, the GPU lease, local

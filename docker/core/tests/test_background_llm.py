@@ -1,4 +1,7 @@
-"""The one background-model route: Claude Haiku, else the caller's safe default."""
+"""The background route with Claude off: the Grok CLI, else the caller's safe default.
+
+test_haiku_background.py covers the route with Claude on.
+"""
 
 from __future__ import annotations
 

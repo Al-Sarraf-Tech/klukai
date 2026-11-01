@@ -9,9 +9,13 @@ fallback of any kind. Design: `docs/superpowers/specs/2026-10-26-cloud-only-ai-d
 use `claude-haiku-5-5`, `output_config.effort` `xhigh`, adaptive thinking.
 A Haiku failure before any text falls back to Grok: the xAI API
 (`grok-4.7`, prepaid `KLUKAI_XAI_API_KEY`, daily cap `KLUKAI_API_DAILY_USD_CAP`),
-then the Grok CLI. Pictures use the xAI API. Background text (memory recall,
-extraction, promises, mood) still runs on the Grok CLI on the owner's account
-login (2026-10-30). Details: `AGENTS.md`. Fish voice is unchanged.
+then the Grok CLI. Pictures use the xAI API.
+
+**Background text is Claude Haiku 5.5 at low (owner decision, 2026-11-01).**
+Under the same two settings, memory recall, extraction, promises, mood and the
+other background writers use `claude-haiku-5-5` at effort `low`. A failure
+goes to the Grok CLI on the owner's account login, then the caller's safe
+default. Details: `AGENTS.md`. Fish voice is unchanged.
 Do not reintroduce LM Studio, Dominus voice, ComfyUI, the GPU lease, local
 embeddings or Qdrant into `docker/core`; `tests/test_cloud_only_invariant.py`
 fails if any of them comes back. `ops/dominus-nobara` is the retired Dominus

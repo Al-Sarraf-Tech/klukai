@@ -14,6 +14,12 @@ in `docs/superpowers/plans/`.
 
 ### Changed
 
+- Background text (memory recall, extraction, promises, mood, the daily recap
+  and the other background writers) uses Claude Haiku 5.5 at effort `low` when
+  `KLUKAI_CLAUDE_PRIMARY=true` and `ANTHROPIC_API_KEY` are set. A failure goes to
+  the Grok CLI, then the caller's safe default. This restores her memory while
+  the Grok account's usage is exhausted. Each request counts against
+  `KLUKAI_EXTRACTION_DAILY_LIMIT`. The startup log names the background model.
 - Chat and the agent loop use Claude Haiku 5.5 (`claude-haiku-5-5`) at
   effort `xhigh` with adaptive thinking when `KLUKAI_CLAUDE_PRIMARY=true`
   and `ANTHROPIC_API_KEY` are set. A Haiku failure before any text falls
