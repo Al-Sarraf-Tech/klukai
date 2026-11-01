@@ -96,7 +96,7 @@ FAL_ERROR_TYPES = frozenset({
 ERROR_BODY_BYTES = 64 * 1024
 BACKGROUND = (
     "The whole image, background included, is hand-painted anime background art like a TV "
-    "anime frame: simplified painted buildings and sky, no photographic detail anywhere. "
+    "anime frame: simplified painted surroundings, no photographic detail anywhere. "
 )
 
 

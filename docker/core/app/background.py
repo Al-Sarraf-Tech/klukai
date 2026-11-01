@@ -14,6 +14,7 @@ from datetime import datetime
 
 from . import context
 from . import memory_archive
+from . import picture_intent
 from .context import ws, memory, affection, proactive, session_id
 from .db import get_conn_autocommit
 from .fact_extractor import create_episode_summary, extract_facts
@@ -285,6 +286,7 @@ async def background_image_gen(
             await ws.send(user_id, {"type": "thinking", "content": ""})
             return
         logger.info("Image gen: starting")
+        picture_intent.note_picture(user_id, "drawing", user_request)
         await ws.send_thinking(
             user_id, "Compiling tactical visualization, Commander..."
         )
@@ -404,12 +406,14 @@ async def background_image_gen(
             await _deliver_generated_image(
                 user_id, img_bytes, full_prompt, aff_level, outcome, picture
             )
+            picture_intent.note_picture(user_id, "delivered")
         else:
             logger.warning(
                 "Image gen: no picture for %s (%s)",
                 user_id,
                 (outcome or {}).get("phase") or ("account" if use_agy else "local"),
             )
+            picture_intent.note_picture(user_id, "failed")
             await ws.send_proactive(
                 user_id,
                 "...Visualization failed. Interference in the rendering pipeline. Ask me again.",
@@ -420,13 +424,13 @@ async def background_image_gen(
             )  # clear thinking bubble
     except Exception as e:
         logger.error("Background image gen failed (%s)", type(e).__name__)
+        picture_intent.note_picture(user_id, "failed", user_request)
         try:
             # Mirror the empty-bytes fallback so the user never gets ghosted —
             # always clear the thinking bubble and surface a graceful message.
             await ws.send_proactive(
                 user_id,
-                "...The rendering pipeline broke mid-frame, Commander. "
-                "I'll attempt the visual again later.",
+                "...The rendering pipeline broke mid-frame, Commander. Ask me again.",
                 persist=False,
             )
             await ws.send(user_id, {"type": "thinking", "content": ""})

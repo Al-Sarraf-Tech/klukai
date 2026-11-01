@@ -442,6 +442,10 @@ class Worker:
                     retry = (not redone and REQUEST_BUDGET - (time.monotonic() - started)
                              >= RENDER_RESERVE + CHECK_TIMEOUT)
                     self.fail_attempt(value["request_id"], index, "check_rejected", not retry)
+                    # The issues stay in the state database: they can describe the picture.
+                    print(f"{provider} attempt {index} check_rejected: "
+                          f"{len(verdict['issues'])} issue(s), redraw={retry}",
+                          file=sys.stderr, flush=True)
                     if not retry:
                         return 502, None
                     redone = True

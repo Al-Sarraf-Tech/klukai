@@ -14,6 +14,7 @@ import json
 import logging
 from pathlib import Path
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 
@@ -25,6 +26,15 @@ from grok_image_render import _refuse_unsupported, aspect_ratio
 logger = logging.getLogger(__name__)
 _MAX_RESPONSE = 20_000_000
 PORTRAIT = Path(__file__).resolve().parents[1] / "docs" / "images" / "klukai-portrait.png"
+# One more try for a passing API failure. The CLI behind it depends on the account's
+# balance, so it may not rescue the picture. A slow failure gets no second wait, since
+# two of them would outlast the core's deadline.
+_RETRY_WITHIN_S = 60.0
+_RETRY_PAUSE_S = 2.0
+
+
+class _PassingFailure(agy.ProviderUnavailable):
+    """A rate limit, a server error or a dropped connection: worth one more try."""
 
 
 def _spend():
@@ -48,8 +58,16 @@ def render_with_fallback(request: dict, references: dict, fallback):
     except OSError as exc:
         logger.warning("xai image portrait unavailable: %s", type(exc).__name__)
         return fallback(request, references)
+    started = time.monotonic()
     try:
-        image, usd = _edit(request, reference, spend)
+        try:
+            image, usd = _edit(request, reference, spend)
+        except _PassingFailure:
+            if time.monotonic() - started > _RETRY_WITHIN_S:
+                raise
+            logger.warning("xai image failed in passing; trying once more")
+            time.sleep(_RETRY_PAUSE_S)
+            image, usd = _edit(request, reference, spend)
     except Exception as exc:
         logger.warning(
             "xai image falling back to the CLI: %s",
@@ -105,9 +123,10 @@ def _edit(request: dict, reference: bytes, spend) -> tuple[bytes, float]:
     except urllib.error.HTTPError as exc:
         exc.read(500)
         # The body can echo the prompt. Keep the status only.
-        raise agy.ProviderUnavailable(f"xai image failed: HTTP {exc.code}") from None
+        failure = _PassingFailure if exc.code == 429 or exc.code >= 500 else agy.ProviderUnavailable
+        raise failure(f"xai image failed: HTTP {exc.code}") from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise agy.ProviderUnavailable(
+        raise _PassingFailure(
             spend.redact(f"xai image is unavailable: {type(exc).__name__}")
         ) from None
     if len(body) > _MAX_RESPONSE:

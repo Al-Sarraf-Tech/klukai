@@ -237,3 +237,33 @@ async def test_uncommitted_repeat_claim_failure_cannot_submit(
         assert await (
             await conn.execute("SELECT count(*) FROM companion_account_image_requests")
         ).fetchone() == (0,)
+
+
+@pytest.mark.parametrize("status", ["failed", "refused", "unavailable"])
+async def test_a_failed_picture_can_be_asked_for_again(
+    account_db, provider_calls, status
+):
+    """She says "ask me again". Replaying the failure made that a lie."""
+    submit, recover = provider_calls
+    submit.return_value = {"status": status, "image": None}
+    assert (await picture())["phase"] == status
+
+    await picture()
+
+    assert submit.await_count == 2
+    assert recover.await_count == 0
+
+
+@pytest.mark.parametrize("status", ["pending", "unknown"])
+async def test_a_picture_that_may_still_exist_is_not_drawn_twice(
+    account_db, provider_calls, status
+):
+    """Paid work may be running. Only observing it is safe."""
+    submit, recover = provider_calls
+    submit.return_value = {"status": status, "image": None}
+    await picture()
+
+    await picture()
+
+    assert submit.await_count == 1
+    assert recover.await_count == 1

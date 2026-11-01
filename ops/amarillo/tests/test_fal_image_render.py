@@ -661,3 +661,9 @@ def test_recovery_private_preflight_outage_preserves_existing_job(setup, monkeyp
         fal.recover(REQUEST, {"klukai": "klukai"})
     assert "private details" not in str(raised.value)
     assert api.calls == [] and attempts(tmp_path) == 1
+
+
+def test_the_shared_brief_never_asks_for_sky():
+    """Every renderer reads this. It contradicted indoor scenes and the checker failed them."""
+    assert "sky" not in fal.BACKGROUND
+    assert "buildings" not in fal.BACKGROUND

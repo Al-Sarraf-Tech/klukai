@@ -6,10 +6,11 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
+import inspect
 import logging
 from typing import Any
 
-from . import her_day, rituals, wardrobe
+from . import her_day, picture_intent, rituals, wardrobe
 from .affection import AffectionManager, AffectionState
 from .llm_router import LLMRouter
 from .memory import MemoryManager
@@ -24,6 +25,28 @@ from .proactive import ProactiveEngine
 from .ws_manager import WSManager
 
 logger = logging.getLogger(__name__)
+
+PICTURE_UNDERWAY = (
+    "\n\nIMAGE GENERATION ACTIVE: A picture is being drawn for this request right now. "
+    "It arrives on its own in about a minute and has not arrived yet. "
+    "Keep your text response to 1 SHORT sentence acknowledging the request, in your own "
+    "voice. Never say it is done, sent or already there. "
+    "Do NOT narrate the process of taking a photo, using a data pad, or activating a camera."
+)
+PICTURE_NOT_UNDERWAY = (
+    "\n\nPICTURES: You can draw and send him pictures. When he asks for one, it is drawn "
+    "and arrives on its own. No picture is being drawn this turn, so never say one is "
+    "coming, done or sent. If he asks whether you can draw, say yes and ask what he wants "
+    "to see. Never say you can't draw."
+)
+
+
+def pictures_available(user_id: str) -> bool:
+    """Whether a request from this account would really be drawn."""
+    from .agy_image_provider import uses_agy_images
+    from .image_provider import selected_provider
+
+    return selected_provider() == "openai" or uses_agy_images(user_id)
 
 
 async def _together(*aws: Awaitable[Any], defaults: tuple[Any, ...]) -> tuple[Any, ...]:
@@ -57,7 +80,7 @@ class ChatPromptBuilder:
     assemble_prompt: Callable[..., str]
     personality: Callable[[], dict[str, Any]]
     wants_thread: Callable[[str], bool]
-    needs_image: Callable[[str], bool]
+    needs_image: Callable[[str], bool | Awaitable[bool]]
     hours_away: Callable[[str], Awaitable[float | None]]
     warm_budget: float
     turn_budget: float
@@ -520,14 +543,17 @@ class ChatPromptBuilder:
         if dream_hint:
             system_prompt += dream_hint
 
-        # Image generation hint — keep text response minimal when an image is coming
-        if self.needs_image(content):
-            system_prompt += (
-                "\n\nIMAGE GENERATION ACTIVE: An image is being generated for this request. "
-                "Keep your text response to 1 SHORT sentence — just acknowledge the request. "
-                "Do NOT narrate the process of taking a photo, using a data pad, or activating a camera. "
-                "The image will appear separately. Example: '...Already done, Commander.' or "
-                "'(I smirk) Patience.' Do NOT write more than 1-2 sentences."
-            )
+        # Whether a picture is underway decides what she may say about one. Her
+        # words never start one, and she cannot see one arrive or fail.
+        underway = self.needs_image(content)
+        if inspect.isawaitable(underway):
+            underway = await underway
+        if underway:
+            system_prompt += PICTURE_UNDERWAY
+        elif pictures_available(user_id):
+            system_prompt += PICTURE_NOT_UNDERWAY
+        last_picture = picture_intent.state_note(user_id)
+        if last_picture:
+            system_prompt += f"\n\n{last_picture}"
 
         return system_prompt

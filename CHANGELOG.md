@@ -12,6 +12,31 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Fixed
+
+- She draws when he asks. Keyword rules caught 155 of 444 realistic requests and
+  fired on 49 of 94 ordinary sentences ("draw the curtains"). Claude Haiku at low
+  effort now reads any message that could be a request, in context, so "yes" after
+  her offer, "try again" after a failure and "i miss you. send me a picture" all
+  work. On a set of 567 phrases it caught 433 of 461 requests with 11 false alarms
+  in 106. It adds about 0.7 s to those messages only. The keyword rules remain the
+  fallback when Haiku is unavailable.
+- She no longer guesses about pictures. Each turn she is told whether one is being
+  drawn and what became of the last, and that she can draw. This replaces an example
+  that taught her to say "Already done" before anything existed.
+- Chat pictures no longer fail on a setting. Chat told the checker "the whole picture
+  stays indoors" while every brief asked for "painted buildings and sky", so two
+  renders with some sky failed the picture. All 6 recorded rejections were chat. The
+  brief no longer asks for sky, and a differing background is now a minor defect
+  (owner, 2026-11-01: "this has to work perfectly").
+- "Ask me again" is now true. The same request within ten minutes replayed the
+  failure without drawing anything. Pictures that may still exist are still never
+  drawn twice.
+- A passing xAI failure gets one more try before the CLI, whose account can be out of
+  balance. A failed picture no longer promises to try "again later".
+- "Draw me that picture" draws. A recall word used to win after she had been told a
+  picture was coming.
+
 ### Security
 
 - Her POV no longer shows a raw error on screen. An unexpected failure showed its

@@ -275,6 +275,8 @@ async def _claim_repeat_request(
                 "FROM companion_account_image_requests "
                 "WHERE user_id = %s AND archive_context->>'chat_repeat_key' = %s "
                 "AND width = %s AND height = %s AND include_commander = %s "
+                # A picture that ended with nothing may be asked for again at once.
+                "AND phase NOT IN ('failed', 'refused', 'unavailable') "
                 "AND created_at > NOW() - make_interval(secs => %s) "
                 "ORDER BY created_at DESC, id DESC LIMIT 1",
                 (

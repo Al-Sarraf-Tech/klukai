@@ -217,3 +217,14 @@ def test_fix_hint_does_not_repeat_the_lettering_it_rejected(check):
         assert word not in hint
     assert "Large red lettering text is visible on the ceiling" in hint
     assert "The Commander's shirt" in hint
+
+
+def test_a_wrong_background_alone_never_costs_him_the_picture(check):
+    """Chat asks for "stays indoors"; two renders with some sky failed the whole picture."""
+    request_line = next(
+        line for line in check.RUBRIC.splitlines() if line.startswith("- request:")
+    )
+    assert "scene" not in request_line
+    assert "subject, outfit or pose" in request_line
+    minor = check.RUBRIC.split("Everything else is minor", 1)[1]
+    assert "setting or background" in minor

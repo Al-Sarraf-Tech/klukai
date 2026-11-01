@@ -111,3 +111,4 @@ def test_no_failed_picture_promises_a_retry_that_never_happens():
         source = (app / name).read_text()
         assert "Visualization failed" in source, name
         assert "try again later" not in source, name
+        assert "again later" not in source, name

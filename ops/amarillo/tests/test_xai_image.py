@@ -199,3 +199,85 @@ def test_the_worker_grok_provider_refuses_nudity_before_the_api():
     render = worker.load_providers(["grok"])[0][1]
     with pytest.raises(Exception, match="Nudity"):
         render({"nudity": True, "width": 832, "height": 1216, "prompt": "x"}, {})
+
+
+def _ok_response(portrait: bytes):
+    body = json.dumps(
+        {"data": [{"b64_json": base64.b64encode(portrait).decode()}], "usage": {}}
+    ).encode()
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    return Response(body)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        urllib.error.HTTPError("u", 500, "no", hdrs=None, fp=io.BytesIO(b"x")),
+        urllib.error.HTTPError("u", 429, "no", hdrs=None, fp=io.BytesIO(b"x")),
+        TimeoutError("slow"),
+    ],
+)
+def test_a_passing_api_failure_gets_one_more_try_before_the_cli(
+    home, monkeypatch, failure
+):
+    """The account behind the CLI can be out of balance, so the CLI may not save it."""
+    calls = []
+
+    def urlopen(req, timeout=0):
+        calls.append(req)
+        if len(calls) == 1:
+            raise failure
+        return _ok_response(_png())
+
+    monkeypatch.setattr(xai_image.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(xai_image, "_portrait", lambda: _png())
+    monkeypatch.setattr(xai_image.time, "sleep", lambda _s: None)
+
+    def no_cli(*_args):
+        raise AssertionError("the retry should have drawn it")
+
+    assert xai_image.render_with_fallback(_request(), {"klukai": {}}, no_cli)
+    assert len(calls) == 2
+
+
+def test_a_bad_request_is_not_tried_twice(home, monkeypatch):
+    calls = []
+
+    def urlopen(req, timeout=0):
+        calls.append(req)
+        raise urllib.error.HTTPError("u", 400, "no", hdrs=None, fp=io.BytesIO(b"x"))
+
+    monkeypatch.setattr(xai_image.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(xai_image, "_portrait", lambda: _png())
+    monkeypatch.setattr(xai_image.time, "sleep", lambda _s: None)
+    result = xai_image.render_with_fallback(
+        _request(), {"klukai": {}}, lambda *_args: b"cli-png"
+    )
+    assert result == b"cli-png"
+    assert len(calls) == 1
+
+
+def test_a_slow_failure_is_not_tried_twice(home, monkeypatch):
+    """Two two-minute waits would outlast the core's deadline for the picture."""
+    calls = []
+    clock = iter([0.0, 120.0])
+
+    def urlopen(req, timeout=0):
+        calls.append(req)
+        raise TimeoutError("slow")
+
+    monkeypatch.setattr(xai_image.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(xai_image, "_portrait", lambda: _png())
+    monkeypatch.setattr(xai_image.time, "monotonic", lambda: next(clock))
+    result = xai_image.render_with_fallback(
+        _request(), {"klukai": {}}, lambda *_args: b"cli-png"
+    )
+    assert result == b"cli-png"
+    assert len(calls) == 1

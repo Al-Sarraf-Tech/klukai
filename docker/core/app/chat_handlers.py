@@ -48,7 +48,7 @@ from .helpers import (
     store_message as _store_message,
 )
 from .image_gen import needs_image
-from .image_request_intent import resolve_picture_request
+from . import picture_intent
 from .memory_archive import update_curation
 from .llm_router import FAILURE_SENTINEL
 from .models import SessionState, new_id
@@ -323,12 +323,15 @@ async def _handle_message(
                 logger.warning("Could not deliver store-failure warning: %s", e)
 
         # Resolve once from his prior turns, before her reply can add context.
-        image_request = resolve_picture_request(
-            content, before_turn.turns, detector=needs_image
+        # It runs beside the prompt build, which waits for it before the hint.
+        picture_decision = asyncio.create_task(
+            picture_intent.resolve(
+                content, before_turn.turns, user_id, detector=needs_image
+            )
         )
 
-        def picture_requested(_content: str) -> bool:
-            return image_request is not None
+        async def picture_requested(_content: str) -> bool:
+            return (await picture_decision) is not None
 
         prompt_builder = ChatPromptBuilder(
             memory,
@@ -459,11 +462,20 @@ async def _handle_message(
         user_id, asyncio.create_task(_pin_next_recall()), survive_disconnect=True
     )
 
+    image_request = await picture_decision
+
+    def picture_admitted(_content: str) -> bool:
+        return image_request is not None
+
+    def recall_admitted(text: str) -> bool:
+        # She was just told a picture is coming, so "draw that picture" draws.
+        return image_request is None and _wants_recall(text)
+
     followups = ChatFollowups(
         ws,
         context.get_last_memory_id,
-        _wants_recall,
-        picture_requested,
+        recall_admitted,
+        picture_admitted,
         do_memory_keep,
         background_recall,
         background_image_gen,

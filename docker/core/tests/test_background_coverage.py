@@ -874,6 +874,30 @@ class TestImageGen:
             "u1", "draw yourself", 832, 1216, False, "hangar"
         )
 
+    @pytest.mark.parametrize(
+        ("result", "expected"),
+        [
+            ({"status": "completed", "image": b"PNG"}, "delivered"),
+            ({"status": "failed", "image": None}, "failed"),
+            (RuntimeError("boom"), "failed"),
+        ],
+    )
+    async def test_she_is_told_how_his_picture_ended(
+        self, bg_mocks, monkeypatch, result, expected
+    ):
+        from app import picture_intent
+
+        monkeypatch.setenv("KLUKAI_CHAT_IMAGE_PROVIDER", "agy")
+        monkeypatch.setenv("KLUKAI_AGY_ALLOWED_USERS", "u1")
+        picture_intent._LAST.clear()
+        generate = AsyncMock(side_effect=[result])
+        with self._agy_patches(generate, AsyncMock(return_value=None)):
+            await bg.background_image_gen("draw yourself", user_id="u1")
+        last = picture_intent.last_picture("u1")
+        picture_intent._LAST.clear()
+        assert last["outcome"] == expected
+        assert last["request"] == "draw yourself"
+
     async def test_agy_without_her_day_falls_back_to_a_neutral_setting(
         self, bg_mocks, monkeypatch
     ):

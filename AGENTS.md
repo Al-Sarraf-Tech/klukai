@@ -30,6 +30,13 @@ has its own breaker, `anthropic_extraction`, so it cannot trip chat's. Her POV
 stories and episode summaries still try the xAI API first. Without both
 settings, background text is the Grok CLI alone.
 
+**Picture requests (owner, 2026-11-01).** `app/picture_intent.py` decides whether he wants a
+picture, with Claude Haiku at low effort reading the message in context, for any message that
+could be a request. The keyword rules (`app/image_prompts.py`, `app/image_request_intent.py`) are
+only the fallback. Each turn tells her whether a picture is underway and how the last one ended
+(`app/chat_prompt.py`). Only his own words can ask for undress: a subject that adds it is dropped.
+The checker treats a differing background as minor.
+
 **xAI API for chat and pictures (owner decision, 2026-10-31; chat is now the
 Haiku fallback).** Chat replies and picture generation use the prepaid key in `KLUKAI_XAI_API_KEY`, loaded from
 `~/.config/klukai/xai.env` at runtime. The key is never committed, logged, or
