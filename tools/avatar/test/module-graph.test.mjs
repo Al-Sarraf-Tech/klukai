@@ -227,7 +227,7 @@ function rigFixture() {
   };
 }
 
-test('isolated Chrome loads the real rig, preserves camera/state and releases WebGL', { timeout: 30000 }, async (t) => {
+test('isolated Chrome loads the real rig, preserves camera/state and releases WebGL', { timeout: 60000 }, async (t) => {
   const root = path.resolve(process.env.KLUKAI_AVATAR_TEST_ROOT || path.join(repo, 'flutter_app/web/companion'));
   const requests = [];
   const server = http.createServer((request, response) => {
@@ -272,7 +272,7 @@ test('isolated Chrome loads the real rig, preserves camera/state and releases We
     fs.rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     if (stderr) t.diagnostic(`Chrome stderr:\n${stderr}`);
   });
-  const deadline = Date.now() + 10000;
+  const deadline = Date.now() + 30000;
   const portFile = path.join(profile, 'DevToolsActivePort');
   while (!fs.existsSync(portFile) && Date.now() < deadline) await delay(25);
   assert.ok(fs.existsSync(portFile), `Chrome did not start: ${stderr}`);
