@@ -14,6 +14,9 @@ from .image_prompts import lighting_period
 
 logger = logging.getLogger(__name__)
 
+# The Her POV screen shows a job's message as written, so the error stays in the log.
+_INTERNAL_FAILURE_LINE = "…Something went wrong on my side. Ask me again."
+
 
 @dataclass
 class HerPOVPipeline:
@@ -319,9 +322,10 @@ class HerPOVPipeline:
                 status="failed",
                 phase="failed",
                 error="internal",
-                message=str(e)[:200],
+                message=_INTERNAL_FAILURE_LINE,
             )
             try:
+                await ws.send_proactive(user_id, _INTERNAL_FAILURE_LINE, persist=False)
                 await ws.send(
                     user_id,
                     {

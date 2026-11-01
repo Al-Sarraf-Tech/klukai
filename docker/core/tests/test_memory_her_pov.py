@@ -503,7 +503,34 @@ class TestRunHerPovFailures:
         job = await hp.get_job("job-1")
         assert job["status"] == "failed"
         assert job["error"] == "internal"
-        assert "archive volume full" in job["message"]
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_never_reaches_the_screen(
+        self, clean_jobs, pipeline, caplog
+    ):
+        """The Her POV screen shows the job's message as written."""
+        pipeline.save_image.side_effect = RuntimeError("archive volume full")
+
+        await hp.run_her_pov("claude", "job-1")
+
+        job = await hp.get_job("job-1")
+        assert "archive volume full" not in job["message"]
+        assert job["message"].startswith("…")
+        assert "Ask me again" in job["message"]
+        # The log keeps what really happened.
+        assert "archive volume full" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_tells_him_in_chat(self, clean_jobs, pipeline):
+        pipeline.save_image.side_effect = RuntimeError("archive volume full")
+
+        await hp.run_her_pov("claude", "job-1")
+
+        said = [c.args[1] for c in pipeline.ws.send_proactive.call_args_list]
+        assert len(said) == 1
+        assert "Ask me again" in said[0]
+        assert "archive volume full" not in said[0]
+        assert pipeline.ws.send_proactive.call_args.kwargs == {"persist": False}
 
     @pytest.mark.asyncio
     async def test_active_slot_released_even_on_crash(self, clean_jobs, pipeline):
@@ -575,6 +602,7 @@ class TestRunHerPovFailures:
     ):
         pipeline.save_image.side_effect = RuntimeError("archive volume full")
         pipeline.ws.send.side_effect = RuntimeError("socket closed")
+        pipeline.ws.send_proactive.side_effect = RuntimeError("socket closed")
 
         await hp.run_her_pov("claude", "job-1")
 

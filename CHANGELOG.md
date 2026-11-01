@@ -14,6 +14,14 @@ in `docs/superpowers/plans/`.
 
 ### Security
 
+- Her POV no longer shows a raw error on screen. An unexpected failure showed its
+  exception text as her line ("Creative text request failed", "Cloud creative
+  request allowance exhausted"), and any error could have put internal detail
+  there. She now says something went wrong and to ask again, in chat as well, and
+  the error stays in the log.
+- A database outage no longer shows its error on the public `/health`, where a
+  connection failure names the database's address. It reports the error type and
+  logs the rest.
 - The image scan accepts two SQLite advisories until 2026-12-01 (`.trivyignore`,
   owner decision). Debian 13 has no fix yet and neither can be reached in the
   core image: CVE-2026-119373 needs FTS5, which nothing uses, and CVE-2026-119586

@@ -259,3 +259,23 @@ class TestLiveHealthAndClear:
         assert hc._cache
         hc.clear_cache()
         assert hc._cache == {}
+
+
+async def test_a_database_error_stays_out_of_the_public_health_response(caplog):
+    """/health is public, and a connection error names the database's address."""
+    from contextlib import asynccontextmanager
+
+    import psycopg
+
+    from app import db
+
+    @asynccontextmanager
+    async def refused():
+        raise psycopg.OperationalError('connection to server at "10.0.0.5" failed')
+        yield
+
+    with patch("app.db.get_conn_autocommit", refused):
+        out = await db.check_health()
+
+    assert out == {"status": "error", "detail": "OperationalError"}
+    assert "10.0.0.5" in caplog.text

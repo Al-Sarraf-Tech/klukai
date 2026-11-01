@@ -168,4 +168,6 @@ async def check_health() -> dict[str, Any]:
                 }
         return {"status": "error", "detail": "SELECT 1 failed"}
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        # /health is public, and a connection error names the database's address.
+        logger.warning("Database health check failed: %s", e)
+        return {"status": "error", "detail": type(e).__name__}
