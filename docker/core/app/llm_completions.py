@@ -15,6 +15,7 @@ from .dependencies import http_stream, json_object
 from .anthropic_messages import (
     completion_message,
     messages_payload,
+    system_blocks,
     tool_definitions,
 )
 
@@ -282,7 +283,7 @@ class LLMCompletionsMixin(ABC):
         system, turns = messages_payload(system_prompt, messages)
         body = {
             "model": family,
-            "system": system,
+            "system": system_blocks(system_prompt, system),
             "messages": turns,
             "max_tokens": min(max(config.max_tokens, 1), CHAT_MAX_TOKENS),
             "thinking": {"type": "adaptive"},
@@ -316,7 +317,18 @@ class LLMCompletionsMixin(ABC):
             raise ValueError("Missing response model")
         config.model = data["model"]
         usage = data.get("usage") or {}
+        latency_ms = (time.monotonic() - start) * 1000
         try:
+            logger.info(
+                "Claude chat: model=%s total_ms=%d input=%d cache_read=%d "
+                "cache_write=%d output=%d",
+                config.model,
+                latency_ms,
+                int(usage.get("input_tokens", 0) or 0),
+                int(usage.get("cache_read_input_tokens", 0) or 0),
+                int(usage.get("cache_creation_input_tokens", 0) or 0),
+                int(usage.get("output_tokens", 0) or 0),
+            )
             from .observability import record_llm_usage
 
             record_llm_usage(
@@ -330,7 +342,7 @@ class LLMCompletionsMixin(ABC):
                     )
                 ),
                 tokens_out=int(usage.get("output_tokens", 0) or 0),
-                latency_ms=(time.monotonic() - start) * 1000,
+                latency_ms=latency_ms,
                 route="chat",
             )
         except Exception:

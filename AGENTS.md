@@ -13,7 +13,9 @@ The reply is buffered and validated before it is sent. A Haiku failure before
 any text (HTTP error, timeout, `max_tokens`, an empty reply) falls back to the
 Grok chat path below: the xAI API, then the CLI. Without both settings chat is
 Grok. Claude API calls are covered by the owner's paid Claude API authorization
-(2026-10-21).
+(2026-10-21). Her persona goes out as a prompt-cached block with a one-hour TTL,
+and each reply logs its cache use as `Claude chat: ... cache_read=`. On her real
+persona at xhigh, first text took 3.5-3.85 s uncached and about 2.5 s cached.
 
 **Claude Haiku 5.5 for background text (owner decision, 2026-11-01).** The Grok
 account's usage ran out on 2026-10-31 ("402 usage balance exhausted") and her

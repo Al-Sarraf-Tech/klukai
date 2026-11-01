@@ -67,6 +67,29 @@ def messages_payload(
     return "\n\n".join(system_parts), converted
 
 
+# Her persona is about 7,200 tokens. One hour keeps it warm across pauses in a
+# conversation, and a cache read refreshes the timer.
+PERSONA_CACHE = {"type": "ephemeral", "ttl": "1h"}
+
+
+def system_blocks(system_prompt: str, system: str) -> str | list[dict[str, Any]]:
+    """Send the byte-stable persona as a cached block ahead of the turn state.
+
+    A prompt with no stable prefix, or one its text does not start with, stays
+    a plain string and is not cached.
+    """
+    stable = getattr(system_prompt, "stable", "") or ""
+    if not stable or not system.startswith(stable):
+        return system
+    blocks: list[dict[str, Any]] = [
+        {"type": "text", "text": stable, "cache_control": dict(PERSONA_CACHE)}
+    ]
+    tail = system[len(stable) :].lstrip("\n")
+    if tail:
+        blocks.append({"type": "text", "text": tail})
+    return blocks
+
+
 def tool_definitions(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return [
         {

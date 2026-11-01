@@ -15,8 +15,10 @@ in `docs/superpowers/plans/`.
 ### Changed
 
 - CI tests use every vCPU of their VM: two `pytest-xdist` workers for the core
-  and ops suites, and `--concurrency=4` for the Flutter suites. `pytest-xdist`
+  and ops suites, and `--concurrency=4` for the Flutter VM suite. `pytest-xdist`
   is hash-locked in `docker/core/requirements-ci.txt`.
+- Chat sends her persona as a prompt-cached block with a one-hour TTL, so a
+  reply at xhigh shows about a second sooner, and logs its cache use.
 - Background text (memory recall, extraction, promises, mood, the daily recap
   and the other background writers) uses Claude Haiku 5.5 at effort `low` when
   `KLUKAI_CLAUDE_PRIMARY=true` and `ANTHROPIC_API_KEY` are set. A failure goes to

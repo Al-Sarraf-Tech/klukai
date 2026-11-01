@@ -109,10 +109,11 @@ for platform in vm chrome; do
   mapfile -d '' -t tests < "$OUTPUT/$platform-tests.nul"
   # Flutter's default tester emits platform=vm machine events, but its CLI
   # does not accept --platform vm. Chrome requires explicit selection.
-  platform_args=()
+  # One test process per vCPU of the frontend VM. Flutter ignores --concurrency
+  # for web tests and prints a line that is not JSON, so Chrome does not get it.
+  platform_args=(--concurrency=4)
   if [[ "$platform" == chrome ]]; then platform_args=(--platform chrome); fi
-  # One test process per vCPU of the frontend VM.
-  run "$platform" "$FLUTTER" test --no-pub --machine --concurrency=4 "${platform_args[@]}" "${tests[@]}"
+  run "$platform" "$FLUTTER" test --no-pub --machine "${platform_args[@]}" "${tests[@]}"
   python3 "$EVIDENCE" machine "$OUTPUT/raw/$platform.stdout" --platform "$platform" --exit-code 0
 done
 

@@ -50,11 +50,21 @@ def test_ops_suite_uses_the_workers_only_where_the_step_asks():
     assert f'PYTEST_PARALLEL="-n {SERIAL_VCPUS}"' in step["run"]
 
 
-def test_flutter_suites_use_every_frontend_cpu():
+def test_flutter_vm_suite_uses_every_frontend_cpu():
     flag = f"--concurrency={FRONTEND_VCPUS}"
     assert flag in frontend_evidence.COMMAND_FLAGS["vm"]
-    assert flag in frontend_evidence.COMMAND_FLAGS["chrome"]
-    assert flag in (ROOT / "scripts/ci/frontend.sh").read_text()
+    assert f"platform_args=({flag})" in (ROOT / "scripts/ci/frontend.sh").read_text()
+
+
+def test_flutter_chrome_suite_does_not_get_an_ignored_flag():
+    # Flutter 3.44 prints "-j/--concurrency was parsed but will be ignored" for
+    # web tests, and that line breaks the machine stream the evidence requires.
+    assert not any(
+        flag.startswith("--concurrency")
+        for flag in frontend_evidence.COMMAND_FLAGS["chrome"]
+    )
+    source = (ROOT / "scripts/ci/frontend.sh").read_text()
+    assert "platform_args=(--platform chrome)" in source
 
 
 def test_xdist_is_hash_locked_for_every_job_that_uses_it():

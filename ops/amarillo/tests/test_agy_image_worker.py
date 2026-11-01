@@ -38,7 +38,9 @@ def worker(monkeypatch):
 
 class UnixConnection(http.client.HTTPConnection):
     def __init__(self, path):
-        super().__init__("localhost", timeout=3)
+        # Generous: a CI VM can stall for seconds under load. Nothing here tests
+        # this client timeout; the worker's own limits are set per test.
+        super().__init__("localhost", timeout=15)
         self.path = str(path)
 
     def connect(self):
@@ -85,7 +87,7 @@ def one_write_status(path, data, *, token):
 
 def raw_request(path, raw):
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(3)
+        connection.settimeout(15)
         connection.connect(str(path))
         connection.sendall(raw)
         chunks = []
@@ -1270,7 +1272,7 @@ def test_recovery_observer_and_review_are_serialized_with_generation(worker, set
                 assert current.generate(payload())[0] == 429
             finally:
                 release.set()
-            assert future.result(timeout=3) == (200, PNG)
+            assert future.result(timeout=15) == (200, PNG)
     assert len(rendered) == len(observed) == len(checked) == 1
 
 
