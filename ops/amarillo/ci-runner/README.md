@@ -37,7 +37,9 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
   job taken over this way waits up to 5 minutes for the evidence pull to bring
   the executor image. If Dominus is gone the pull cannot, so the job fails
   closed and the run needs "Re-run all jobs". Re-running only the failed jobs
-  never certifies a release, because evidence is per attempt.
+  never deploys, because the relay refuses evidence that spans attempts, and a
+  re-run of only `test` or `real-backends` fails after its wait, because the
+  image's path includes the attempt.
 - **Evidence.** Dominus cannot reach amarillo, so amarillo pulls.
   `klukai-ci-pull.timer` (user unit, every minute) runs
   `ops/amarillo/scripts/klukai-ci-pull.py` into `/docker/klukai/ci-artifacts`.

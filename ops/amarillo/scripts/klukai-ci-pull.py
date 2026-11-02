@@ -10,13 +10,14 @@ one pool. The deployer then reads everything locally and still binds every
 byte to the run's own job log. Dominus being off is normal; the next minute
 tries again.
 
-The link between the hosts is relayed (about 2 MiB/s), a Dominus run writes
-about 1 GB and its record holds about 6,600 files, so:
+A Dominus run writes about 1 GB and its record holds about 6,600 files, and the
+link can fall back to a relay at about 2 MiB/s, so:
 - Dominus reports a fingerprint per record (files, bytes, newest mtime) for
   the two days it keeps them. A record is copied again only when it changed
   since its last complete copy (the ledger in STATE).
-- Each pull copies the frontend job first (the PWA the deployer reads, about
-  70 MB), then gives the rest at most BULK_SECONDS, one record at a time and
+- Each pull copies the frontend job (the PWA the deployer reads, about 70 MB)
+  and the executor image (about 120 MB, for a test job amarillo took over)
+  first, then gives the rest at most BULK_SECONDS, one record at a time and
   oldest first. Interrupted files resume from .rsync-partial on the next pull.
 - Directories get local times, so amarillo's archiver (two hours idle) never
   packs a revision while its files are still arriving. A revision it has

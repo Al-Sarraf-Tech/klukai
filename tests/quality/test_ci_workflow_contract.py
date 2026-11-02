@@ -212,6 +212,9 @@ def test_existing_required_names_are_preserved_and_every_job_is_aggregated():
     # component-shards reports through the components aggregator, which keeps the gate name.
     assert set(required["needs"]) == set(jobs) - {"all-required", "affected-required", "component-shards"}
     for key, job in jobs.items():
+        # Routed jobs get no exemption: a tolerated failure would turn a gate green.
+        assert not job.get("continue-on-error"), key
+        assert not any(step.get("continue-on-error") for step in job["steps"]), key
         labels = job["runs-on"]
         if isinstance(labels, str):
             # Owner, 2026-10-22: these groups run on Dominus when its pool is
@@ -232,9 +235,7 @@ def test_existing_required_names_are_preserved_and_every_job_is_aggregated():
             if isinstance(dependencies, str):
                 dependencies = [dependencies]
             assert "source-policy" in dependencies or "ci-image" in dependencies
-        assert not job.get("continue-on-error")
         for step in job["steps"]:
-            assert not step.get("continue-on-error")
             action = step.get("uses", "")
             assert (
                 not action
