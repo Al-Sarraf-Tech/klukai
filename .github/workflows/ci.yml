@@ -75,7 +75,7 @@ jobs:
         id: route
         env:
           DOMINUS_HEARTBEAT: ${{ vars.KLUKAI_CI_DOMINUS_HEARTBEAT }}
-        run: python3 -m tools.ci.pool --heartbeat "${DOMINUS_HEARTBEAT:-0}" --now "$(date +%s)" >> "$GITHUB_OUTPUT"
+        run: python3 -m tools.ci.pool --heartbeat="${DOMINUS_HEARTBEAT:-0}" --now "$(date +%s)" >> "$GITHUB_OUTPUT"
       - name: Fail fast on formatting before allocating build VMs
         run: python3 -m tools.ci.quick_lint --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/preflight-ruff"
       - name: Every admitted push and dispatch certifies the full source
@@ -99,6 +99,7 @@ jobs:
     timeout-minutes: 30
     outputs:
       image_id: ${{ steps.build.outputs.image_id }}
+      labels_serial: ${{ steps.follow.outputs.labels_serial }}
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/ci-image
     steps:
@@ -107,6 +108,10 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
+      - name: Send the jobs that load this image to the pool that really built it
+        # amarillo may have taken this job over from Dominus (tools/ci/pool.py).
+        id: follow
+        run: python3 -m tools.ci.pool --here "$(ip -4 route show default)" >> "$GITHUB_OUTPUT"
       - name: Restore optional verified Docker build materials
         shell: bash
         run: |
@@ -251,7 +256,7 @@ jobs:
   test:
     name: Test Suite
     needs: [source-policy, ci-image]
-    runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_serial) }}
+    runs-on: ${{ fromJSON(needs.ci-image.outputs.labels_serial) }}
     timeout-minutes: 25
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/core
@@ -269,6 +274,11 @@ jobs:
         run: |
           set -euo pipefail
           if ! docker image inspect "$KLUKAI_CORE_CI_IMAGE" >/dev/null 2>&1; then
+            # amarillo may have taken this job over; its evidence pull brings the image.
+            for _ in $(seq 1 30); do
+              [ -s "$HANDOFF/image.tar.sha256" ] && [ -s "$HANDOFF/image.tar" ] && break
+              sleep 10
+            done
             echo "$(cat "$HANDOFF/image.tar.sha256")  $HANDOFF/image.tar" | sha256sum -c --quiet -
             docker load -q -i "$HANDOFF/image.tar"
           fi
@@ -283,7 +293,7 @@ jobs:
     # read by the deployed relay), so it changes only together with that list.
     name: Real PostgreSQL, Valkey and Qdrant recovery
     needs: [source-policy, ci-image]
-    runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_serial) }}
+    runs-on: ${{ fromJSON(needs.ci-image.outputs.labels_serial) }}
     timeout-minutes: 20
     env:
       KLUKAI_CI_OUTPUT: /opt/klukai-ci/artifacts/${{ github.sha }}/${{ github.run_id }}-${{ github.run_attempt }}/backends
@@ -302,6 +312,11 @@ jobs:
         run: |
           set -euo pipefail
           if ! docker image inspect "$KLUKAI_CORE_CI_IMAGE" >/dev/null 2>&1; then
+            # amarillo may have taken this job over; its evidence pull brings the image.
+            for _ in $(seq 1 30); do
+              [ -s "$HANDOFF/image.tar.sha256" ] && [ -s "$HANDOFF/image.tar" ] && break
+              sleep 10
+            done
             echo "$(cat "$HANDOFF/image.tar.sha256")  $HANDOFF/image.tar" | sha256sum -c --quiet -
             docker load -q -i "$HANDOFF/image.tar"
           fi

@@ -25,27 +25,32 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
   - **under 150 s old:** `ci-image` → `test`/`real-backends`, the component
     suites (one VM per suite) and Flutter go to Dominus;
   - **always on amarillo:** quick checks and `image-scan` → `perf`. Perf
-    measures on calibrated hardware, and the release artifacts stay local to
-    the deployer;
+    measures on calibrated hardware, and the release image stays local to the
+    deployer;
   - **otherwise:** all of it stays on amarillo.
 
-  Jobs that hand files to each other stay in one pool.
+  Jobs that hand files to each other stay in one pool: `test` and
+  `real-backends` follow the pool that really built `ci-image`'s image.
 - **Fallback.** amarillo's controller takes over any `klukai-dominus-*` job
   still queued after 180 s (Dominus went off, started gaming, or is full),
-  registering its runner with that job's labels.
+  registering its runner with that job's labels. A `test` or `real-backends`
+  job taken over this way waits up to 5 minutes for the evidence pull to bring
+  the executor image. If Dominus is gone the pull cannot, so the job fails
+  closed and the run needs "Re-run all jobs". Re-running only the failed jobs
+  never certifies a release, because evidence is per attempt.
 - **Evidence.** Dominus cannot reach amarillo, so amarillo pulls.
   `klukai-ci-pull.timer` (user unit, every minute) runs
   `ops/amarillo/scripts/klukai-ci-pull.py` into `/docker/klukai/ci-artifacts`.
   Nothing is deleted or overwritten. The deployer reads it all locally and
   still binds every byte to the run's own job log.
-  - The link is relayed, about 2 MiB/s. A Dominus run writes about 1.1 GB in
-    about 6,600 files.
+  - A Dominus run writes about 1.1 GB in about 6,600 files. Each pull is
+    time-boxed, so a full copy takes about 20 minutes even on a direct link.
   - Dominus lists a fingerprint per record (files, bytes, newest mtime) for
     the two days it keeps records. A record is copied again only when it
     changed since its last complete copy; the ledger is in
     `~/.local/state/klukai/ci-pull.json`.
   - Each pull copies the frontend job (the PWA the deployer reads, about
-    70 MB) first. The rest gets 45 s per pull, oldest record first, and
+    70 MB) and the executor image (about 120 MB) first. The rest gets 45 s per pull, oldest record first, and
     interrupted files resume on the next pull.
   - A PWA still arriving makes the deployer retry with backoff, never deploy
     early: the bytes must match the job log.
@@ -58,6 +63,8 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
 ### Install the Dominus pool (root on Dominus)
 
 ```sh
+# VM disks live on the NVMe array, bind-mounted at the path the controller uses (fstab, with nofail):
+#   /mnt/nvmer0/vms/klukai-ci /var/lib/libvirt/images/klukai-ci none bind,nofail,x-systemd.requires-mounts-for=/mnt/nvmer0 0 0
 sudo install -d -m 0755 /opt/klukai-ci /etc/klukai-ci /var/lib/libvirt/images/klukai-ci/base
 # From amarillo: stream the base image (zstd more than halves 6.2 GiB over the relay),
 # then keep it only if its digest matches amarillo's base.qcow2.sha256:
@@ -96,7 +103,7 @@ amarillo takes over anything still queued.
 |---|---|---|
 | `[self-hosted, Linux, X64, klukai-amarillo-heavy]` | 8 vCPU, 8 GiB (+ zram swap) | perf-gate (exclusive), existing nightly jobs |
 | `[self-hosted, Linux, X64, klukai-amarillo-build]` | 4 vCPU, 4 GiB | ci-image (before serial suites) |
-| `[self-hosted, Linux, X64, klukai-amarillo-serial]` | 2 vCPU, 4 GiB | components, test, real-backends |
+| `[self-hosted, Linux, X64, klukai-amarillo-serial]` | 2 vCPU, 4 GiB | component-shards, components, test, real-backends |
 | `[self-hosted, Linux, X64, klukai-amarillo-medium]` | 4 vCPU, 4 GiB | image-scan |
 | `[self-hosted, Linux, X64, klukai-amarillo-frontend]` | 4 vCPU, 8 GiB (+ zram swap) | frontend |
 | `[self-hosted, Linux, X64, klukai-amarillo-small]` | 2 vCPU, 3 GiB | source-policy/preflight/selection, lint, typecheck, security, final gates |

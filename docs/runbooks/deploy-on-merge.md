@@ -33,8 +33,9 @@ The deployer is pull-based. A systemd user timer on amarillo
      cycle re-checks, so a green re-run deploys it.
 5. **Artifacts.** These steps change nothing in production. The core image
    (when `docker/core`, `docker-compose.yml` or `config/` changed) and the CI-built PWA are
-   read from amarillo's own CI tree (`/docker/klukai/ci-artifacts`; never
-   Dominus).
+   read from amarillo's own CI tree (`/docker/klukai/ci-artifacts`). The image
+   is built on amarillo. A PWA built on Dominus arrives through
+   `klukai-ci-pull`, and the deployer never reads Dominus directly.
    - Each is checked against the digest that run printed in its own GitHub
      job log:
      - `KLUKAI_RELEASE_MANIFEST_SHA256` for the image;

@@ -215,6 +215,13 @@ class GreenRunTests(unittest.TestCase):
             relay.green_run("o/r", REV, "tok", self.api(runs, jobs)), "1-1"
         )
 
+    def test_component_suite_jobs_do_not_change_what_certifies(self) -> None:
+        run = {"id": 1, "run_attempt": 1, "head_sha": REV, "conclusion": "success",
+               "status": "completed", "run_started_at": "2026-10-17T01:00:00Z"}
+        gates = [{"name": name, "conclusion": "success"} for name in relay.FULL_CI_GATES]
+        shard = {"name": "Component suite (ops)", "conclusion": "success"}
+        self.assertEqual(relay.green_run("o/r", REV, "tok", self.api([run], {"1": gates + [shard]})), "1-1")
+
     def test_no_green_gate_means_no_image(self) -> None:
         runs = [
             {

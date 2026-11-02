@@ -96,6 +96,9 @@ def test_the_deployer_s_frontend_evidence_goes_first_and_the_rest_is_time_boxed(
     pull.pull([f"{SHA}/39-1"], run, tmp_path)
     (first, _), (rest, kw) = seen
     assert first[0] == "rsync" and "--include=/*/*/frontend/***" in first and "--exclude=/*/*/*" in first
+    # A job amarillo takes over from Dominus is waiting for this image.
+    assert "--include=/*/*/ci-tool-image/***" in first
+    assert first.index("--include=/*/*/ci-tool-image/***") < first.index("--exclude=/*/*/*")
     assert rest[0] == "timeout" and int(rest[rest.index("--kill-after=10") + 1]) <= pull.BULK_SECONDS
     assert not any(a.startswith("--include") or a.startswith("--exclude") for a in rest)
     assert kw["timeout"] > pull.BULK_SECONDS

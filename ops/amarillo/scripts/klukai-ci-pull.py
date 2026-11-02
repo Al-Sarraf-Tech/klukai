@@ -54,8 +54,9 @@ find . -mindepth 2 -maxdepth 2 -type d -mmin "-$2" -printf '%P\n' | while IFS= r
     awk '{n++; b+=$2; if ($1>m) m=$1} END {printf "%d:%d:%.6f", n, b, m}')" "$r"
 done
 """
-# The job directory the deployer reads from a Dominus run.
-PRIORITY = ["--include=/*/*/frontend/***", "--exclude=/*/*/*"]
+# The job directory the deployer reads from a Dominus run, and the executor image
+# a test job amarillo took over from Dominus is waiting for.
+PRIORITY = ["--include=/*/*/frontend/***", "--include=/*/*/ci-tool-image/***", "--exclude=/*/*/*"]
 BULK_SECONDS = 45
 # Too little time left to be worth starting another record's copy.
 MIN_SLICE_SECONDS = 5

@@ -26,8 +26,11 @@ LEGACY_NAMES = {
 
 ROUTED = {group: "${{ fromJSON(needs.source-policy.outputs.labels_%s) }}" % group
           for group in ("build", "serial", "frontend")}
-MOVABLE_JOBS = {"ci-image": "build", "test": "serial", "real-backends": "serial",
-                "components": "serial", "component-shards": "serial", "frontend": "frontend"}
+MOVABLE_JOBS = {"ci-image": "build", "components": "serial", "component-shards": "serial", "frontend": "frontend"}
+# These load the image ci-image built, so they follow the pool that really built it.
+FOLLOWS_IMAGE = "${{ fromJSON(needs.ci-image.outputs.labels_serial) }}"
+EXPECTED_ROUTE = {**{job: ROUTED[group] for job, group in MOVABLE_JOBS.items()},
+                  "test": FOLLOWS_IMAGE, "real-backends": FOLLOWS_IMAGE}
 
 
 def test_the_router_yields_one_job_vm_labels_from_the_heartbeat():
@@ -82,8 +85,64 @@ def test_the_aggregator_fails_when_any_suite_fails():
 
 def test_a_selective_plan_skips_shards_and_aggregator_together():
     jobs = workflow()["jobs"]
-    condition = "needs.source-policy.outputs.components == 'true'"
-    assert condition in jobs["component-shards"]["if"] and condition in jobs["components"]["if"]
+    assert "needs.source-policy.outputs.components == 'true'" in jobs["components"]["if"]
+    assert jobs["component-shards"]["if"] == jobs["components"]["if"]
+
+
+@pytest.mark.parametrize("job", ["component-shards", "components"])
+def test_a_failed_suite_can_never_be_tolerated(job):
+    assert "continue-on-error" not in workflow()["jobs"][job]
+
+
+def test_ci_image_publishes_the_pool_it_really_ran_on():
+    job = workflow()["jobs"]["ci-image"]
+    assert job["outputs"]["labels_serial"] == "${{ steps.follow.outputs.labels_serial }}"
+    step = next(row for row in job["steps"] if row.get("id") == "follow")
+    assert 'tools.ci.pool --here "$(ip -4 route show default)"' in step["run"]
+
+
+def _load_step(job):
+    return next(row for row in workflow()["jobs"][job]["steps"]
+                if row.get("name") == "Load the executor image built by the ci-image job")
+
+
+def _run_load_step(job, tmp_path, sleep_body):
+    handoff, tools = tmp_path / "handoff", tmp_path / "bin"
+    handoff.mkdir()
+    tools.mkdir()
+    (tools / "docker").write_text(
+        '#!/bin/sh\ncase "$1 $2" in\n'
+        '  "image inspect") [ -f "$LOADED" ] || exit 1; [ "$3" = --format ] && echo "$KLUKAI_CORE_CI_IMAGE"; exit 0;;\n'
+        '  "load -q") touch "$LOADED";;\nesac\n')
+    (tools / "sleep").write_text("#!/bin/sh\n" + sleep_body.replace("HANDOFF", str(handoff)))
+    for name in ("docker", "sleep"):
+        (tools / name).chmod(0o755)
+    return subprocess.run(
+        ["bash", "-euo", "pipefail", "-c", _load_step(job)["run"]],
+        env={"PATH": f"{tools}:{os.environ['PATH']}", "HANDOFF": str(handoff),
+             "KLUKAI_CORE_CI_IMAGE": "sha256:x", "LOADED": str(tmp_path / "loaded")},
+        capture_output=True, text=True, timeout=60)
+
+
+@pytest.mark.parametrize("job", ["test", "real-backends"])
+def test_a_job_taken_over_from_the_other_pool_waits_for_the_pulled_image(job, tmp_path):
+    arrives = 'printf payload > HANDOFF/image.tar\nsha256sum HANDOFF/image.tar | cut -d" " -f1 > HANDOFF/image.tar.sha256\n'
+    result = _run_load_step(job, tmp_path, arrives)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "loaded").exists()
+
+
+@pytest.mark.parametrize("job", ["test", "real-backends"])
+def test_an_image_that_never_arrives_fails_the_job(job, tmp_path):
+    assert _run_load_step(job, tmp_path, "exit 0\n").returncode != 0
+    assert not (tmp_path / "loaded").exists()
+
+
+@pytest.mark.parametrize("job", ["test", "real-backends"])
+def test_a_corrupt_pulled_image_is_refused(job, tmp_path):
+    corrupt = 'printf payload > HANDOFF/image.tar\necho 0000 > HANDOFF/image.tar.sha256\n'
+    assert _run_load_step(job, tmp_path, corrupt).returncode != 0
+    assert not (tmp_path / "loaded").exists()
 
 def workflow():
     return yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
@@ -157,7 +216,7 @@ def test_existing_required_names_are_preserved_and_every_job_is_aggregated():
         if isinstance(labels, str):
             # Owner, 2026-10-22: these groups run on Dominus when its pool is
             # online (tools/ci/pool.py), else on amarillo; see the router test.
-            assert key in MOVABLE_JOBS and labels == ROUTED[MOVABLE_JOBS[key]], key
+            assert labels == EXPECTED_ROUTE.get(key), key
             continue
         # Owner decision 2026-10-19: everything else runs on amarillo's one-job VMs.
         assert labels in (
@@ -323,7 +382,7 @@ def test_core_and_real_backends_use_one_source_bound_tool_image():
         assert "services" not in job
         # source-policy publishes the pool; both stay with ci-image's executor image.
         assert job["needs"] == ["source-policy", "ci-image"]
-        assert job["runs-on"] == ROUTED["serial"] and jobs["ci-image"]["runs-on"] == ROUTED["build"]
+        assert job["runs-on"] == FOLLOWS_IMAGE and jobs["ci-image"]["runs-on"] == ROUTED["build"]
         commands = "\n".join(step.get("run", "") for step in job["steps"])
         assert command in commands and "pip install" not in commands
         assert (

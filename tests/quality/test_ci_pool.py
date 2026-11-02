@@ -52,3 +52,33 @@ def test_the_cli_writes_github_output_lines():
 ])
 def test_component_suites_fan_out_only_on_dominus(beat, suites):
     assert json.loads(pool.plan(beat, NOW)["component_suites"]) == suites
+
+
+@pytest.mark.parametrize("beat", ["\u00b2", "9" * 5000, "--x", "1793583808\npool=dominus"])
+def test_a_heartbeat_that_is_not_a_plain_number_stays_on_amarillo(beat):
+    assert pool.plan(beat, NOW)["pool"] == "amarillo"
+
+
+def test_the_cli_takes_a_heartbeat_that_looks_like_a_flag():
+    result = subprocess.run([sys.executable, "-m", "tools.ci.pool", "--heartbeat=--x", "--now", str(NOW)],
+                            cwd=ROOT, capture_output=True, text=True, check=True)
+    assert "pool=amarillo" in result.stdout
+
+
+@pytest.mark.parametrize("gateway,host", [("10.231.0.1", "amarillo"), ("10.232.0.1", "dominus")])
+def test_jobs_that_load_the_image_follow_the_pool_that_built_it(gateway, host):
+    route = f"default via {gateway} dev enp1s0 proto static\n"
+    assert json.loads(pool.here(route)["labels_serial"])[-1] == f"klukai-{host}-serial"
+
+
+@pytest.mark.parametrize("route", ["default via 192.168.1.1 dev eth0\n", ""])
+def test_an_unknown_gateway_fails_the_job_rather_than_guessing(route):
+    with pytest.raises(SystemExit):
+        pool.here(route)
+
+
+def test_the_cli_reports_this_vms_pool():
+    result = subprocess.run([sys.executable, "-m", "tools.ci.pool", "--here", "default via 10.232.0.1 dev e\n"],
+                            cwd=ROOT, capture_output=True, text=True, check=True)
+    assert json.loads(dict(line.split("=", 1) for line in result.stdout.splitlines())["labels_serial"])[-1] \
+        == "klukai-dominus-serial"
