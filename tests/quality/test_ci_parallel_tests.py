@@ -44,7 +44,7 @@ def test_ops_suite_uses_the_workers_only_where_the_step_asks():
     assert re.search(r"^PYTEST_PARALLEL \?=\s*$", makefile, re.M)
     step = next(
         row
-        for row in _workflow_job("components")["steps"]
+        for row in _workflow_job("component-shards")["steps"]
         if "make test-ops" in row.get("run", "")
     )
     assert f'PYTEST_PARALLEL="-n {SERIAL_VCPUS}"' in step["run"]

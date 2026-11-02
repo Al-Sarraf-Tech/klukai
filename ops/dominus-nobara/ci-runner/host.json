@@ -1,9 +1,9 @@
 {
   "pool": "dominus",
   "steal_from": null,
-  "max_vcpus": 20,
-  "max_memory_mib": 32768,
-  "slots": 8,
+  "max_vcpus": 28,
+  "max_memory_mib": 98304,
+  "slots": 14,
   "subnet": "10.232.0",
   "artifacts": "/srv/klukai-ci/artifacts",
   "temp_sensor": "k10temp",
@@ -17,5 +17,6 @@
   "record_days": 2,
   "start_below_c": 80,
   "pause_at_c": 90,
-  "resume_below_c": 78
+  "resume_below_c": 78,
+  "memory_headroom_mib": 16384
 }

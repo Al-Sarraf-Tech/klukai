@@ -56,8 +56,9 @@ endpoint, setting or module returns to the core or its compose service.
   boolean heartbeat, independently of model servers.
 - Explicit cloud edits can fill missing blink/talk frames. CPU crop/mask/composite
   operations preserve the base portrait; they run no model. Cached frames stay available.
-- Klukai's CI and releases use Amarillo only. Dominus's old AI containers and
-  dedicated CI controller are retired; shared UCI excludes this repository.
+- Klukai's releases use Amarillo only. Dominus's old AI containers are retired;
+  shared UCI excludes this repository. Owner, 2026-10-31 and 2026-11-01: her CI
+  pool is back on Dominus too, and fans out there when it is healthy.
 - Recall quality now depends on full-text candidates. A memory that shares no
   words with the message is only a candidate through its importance and
   recency.

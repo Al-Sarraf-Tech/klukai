@@ -27,26 +27,63 @@ LEGACY_NAMES = {
 ROUTED = {group: "${{ fromJSON(needs.source-policy.outputs.labels_%s) }}" % group
           for group in ("build", "serial", "frontend")}
 MOVABLE_JOBS = {"ci-image": "build", "test": "serial", "real-backends": "serial",
-                "components": "serial", "frontend": "frontend"}
+                "components": "serial", "component-shards": "serial", "frontend": "frontend"}
 
 
-def test_the_router_only_ever_yields_amarillo_one_job_vm_labels():
+def test_the_router_yields_one_job_vm_labels_from_the_heartbeat():
     from tools.ci import pool
 
     routed = workflow()["jobs"]["source-policy"]["outputs"]
     for group in ("build", "serial", "frontend"):
         assert routed[f"labels_{group}"] == "${{ steps.route.outputs.labels_%s }}" % group
-    for beat in ("0", "1800000000"):
+    assert routed["component_suites"] == "${{ steps.route.outputs.component_suites }}"
+    for beat, expected in (("0", "amarillo"), ("1800000000", "dominus")):
         plan = pool.plan(beat, 1800000010)
+        assert plan["pool"] == expected
         for group in ("build", "serial", "frontend"):
             assert json.loads(plan[f"labels_{group}"]) == [
-                "self-hosted", "Linux", "X64", f"klukai-{plan['pool']}-{group}"]
+                "self-hosted", "Linux", "X64", f"klukai-{expected}-{group}"]
     route = next(s for s in workflow()["jobs"]["source-policy"]["steps"] if s.get("id") == "route")
-    assert "DOMINUS_HEARTBEAT" not in route.get("env", {})
-    assert "KLUKAI_CI_DOMINUS_HEARTBEAT" not in route["run"]
-    assert plan["pool"] == "amarillo"
+    assert route["env"]["DOMINUS_HEARTBEAT"] == "${{ vars.KLUKAI_CI_DOMINUS_HEARTBEAT }}"
     assert "${{" not in route["run"]  # the variable enters through the environment
 
+
+SUITE_STEPS = {"make test-ops": "ops", "make test-voice": "voice", "make test-bridge": "bridge",
+               "make test-js": "js", "make test-shell": "js"}
+
+
+def run_block_text(step, **environment):
+    return subprocess.run(["bash", "-euo", "pipefail", "-c", step["run"]],
+                          env={"PATH": os.environ["PATH"], **environment}, capture_output=True, text=True)
+
+
+def test_component_suites_run_in_one_vm_each_and_all_together_on_amarillo():
+    job = workflow()["jobs"]["component-shards"]
+    assert job["strategy"]["fail-fast"] is False
+    assert job["strategy"]["matrix"]["suite"] == "${{ fromJSON(needs.source-policy.outputs.component_suites) }}"
+    assert job["runs-on"] == ROUTED["serial"]
+    for command, suite in SUITE_STEPS.items():
+        step = next(row for row in job["steps"] if command in row.get("run", ""))
+        assert step["if"] == "contains(fromJSON('[\"all\",\"%s\"]'), matrix.suite)" % suite
+
+
+def test_the_aggregator_fails_when_any_suite_fails():
+    job = workflow()["jobs"]["components"]
+    assert job["name"] == "Isolated component suites"
+    assert job["needs"] == ["source-policy", "ci-image", "component-shards"]
+    assert job["if"].startswith("always() && !cancelled()")
+    assert job["runs-on"] == ROUTED["serial"]
+    step = job["steps"][0]
+    assert step["env"]["SHARDS"] == "${{ needs.component-shards.result }}"
+    assert run_block_text(step, SHARDS="success").returncode == 0
+    for result in ("failure", "skipped", "cancelled"):
+        assert run_block_text(step, SHARDS=result).returncode != 0
+
+
+def test_a_selective_plan_skips_shards_and_aggregator_together():
+    jobs = workflow()["jobs"]
+    condition = "needs.source-policy.outputs.components == 'true'"
+    assert condition in jobs["component-shards"]["if"] and condition in jobs["components"]["if"]
 
 def workflow():
     return yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
@@ -113,7 +150,8 @@ def test_existing_required_names_are_preserved_and_every_job_is_aggregated():
     assert all(jobs[key]["name"] == value for key, value in LEGACY_NAMES.items())
     required = jobs["all-required"]
     assert required["if"] == "always() && needs.source-policy.outputs.full == 'true'"
-    assert set(required["needs"]) == set(jobs) - {"all-required", "affected-required"}
+    # component-shards reports through the components aggregator, which keeps the gate name.
+    assert set(required["needs"]) == set(jobs) - {"all-required", "affected-required", "component-shards"}
     for key, job in jobs.items():
         labels = job["runs-on"]
         if isinstance(labels, str):
@@ -358,7 +396,7 @@ def test_component_only_push_can_run_after_intentionally_skipped_tool_image():
     selected = plan(["ops/amarillo/tests/test_ci_runner.py"])
     expected = required(selected)
     assert "components" in expected and "ci-image" not in expected
-    job = workflow()["jobs"]["components"]
+    job = workflow()["jobs"]["component-shards"]
     assert job["needs"] == ["source-policy", "ci-image"]
     assert (
         "always() && !cancelled() && needs.source-policy.result == 'success'"

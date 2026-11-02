@@ -336,7 +336,7 @@ def test_component_workflow_pytest_starts_with_strict_warnings_and_explicit_loop
 
     root = Path(__file__).resolve().parents[2]
     job = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())["jobs"][
-        "components"
+        "component-shards"
     ]
     step = next(row for row in job["steps"] if "make test-ops" in row.get("run", ""))
     config = tmp_path / "pytest.ini"

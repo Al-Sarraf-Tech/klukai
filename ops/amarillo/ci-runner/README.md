@@ -10,9 +10,10 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
 - **Pools.** The same controller runs on both hosts.
   - amarillo needs no config: 12 threads, `klukai-amarillo-*` labels, perf alone.
   - Dominus reads `/etc/klukai-ci/host.json` (`ops/dominus-nobara/ci-runner/`):
-    - 20 threads and 32 GiB;
+    - 28 vCPUs, 96 GiB and 14 slots (owner, 2026-10-31), keeping 16 GiB of memory free;
     - `klukai-dominus-*` labels;
     - subnet `10.232.0.0/24` with the same fail-closed guard;
+    - `machine.slice` holds every VM to CPUs 2-15,18-31 at low CPU weight, so the host keeps its 4;
     - AMD `k10temp` sensor, starting guests below 80 C and pausing them at 90 C
       (a 7950X runs up to 95 C by design; amarillo keeps 62/68 C);
     - the owner's GitHub CLI login, read in memory.
@@ -22,7 +23,7 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
   every minute, and `0` otherwise.
 - **Routing.** CI's first job (`tools/ci/pool.py`) reads the heartbeat:
   - **under 150 s old:** `ci-image` → `test`/`real-backends`, the component
-    suites and Flutter go to Dominus;
+    suites (one VM per suite) and Flutter go to Dominus;
   - **always on amarillo:** quick checks and `image-scan` → `perf`. Perf
     measures on calibrated hardware, and the release artifacts stay local to
     the deployer;

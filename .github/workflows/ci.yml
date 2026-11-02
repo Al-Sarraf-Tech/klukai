@@ -44,6 +44,7 @@ jobs:
       labels_build: ${{ steps.route.outputs.labels_build }}
       labels_serial: ${{ steps.route.outputs.labels_serial }}
       labels_frontend: ${{ steps.route.outputs.labels_frontend }}
+      component_suites: ${{ steps.route.outputs.component_suites }}
     steps:
       - name: Require reviewed exact source before checkout
         id: admit
@@ -67,9 +68,14 @@ jobs:
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Route every Klukai job to Amarillo
+      - name: Choose the CI pool (Dominus when online, else amarillo)
+        # tools/ci/pool.py: a fresh Dominus heartbeat moves the build/test chain,
+        # the component suites and Flutter there; quick checks and image-scan/perf
+        # stay on amarillo, which also takes over a Dominus job that waits too long.
         id: route
-        run: python3 -m tools.ci.pool >> "$GITHUB_OUTPUT"
+        env:
+          DOMINUS_HEARTBEAT: ${{ vars.KLUKAI_CI_DOMINUS_HEARTBEAT }}
+        run: python3 -m tools.ci.pool --heartbeat "${DOMINUS_HEARTBEAT:-0}" --now "$(date +%s)" >> "$GITHUB_OUTPUT"
       - name: Fail fast on formatting before allocating build VMs
         run: python3 -m tools.ci.quick_lint --root "$GITHUB_WORKSPACE" --output "$RUNNER_TEMP/preflight-ruff"
       - name: Every admitted push and dispatch certifies the full source
@@ -148,12 +154,17 @@ jobs:
           python3 -m tools.ci.docker_cache publish-buildkit --record "$KLUKAI_CI_ARTIFACT_ROOT/cache/ci-buildkit.json" \
             --directory "$KLUKAI_CI_OUTPUT/buildkit-cache"
 
-  components:
-    name: Isolated component suites
+  component-shards:
+    # One VM per suite on Dominus, one VM for all of them on amarillo (tools/ci/pool.py).
+    name: Component suite (${{ matrix.suite }})
     needs: [source-policy, ci-image]
     if: always() && !cancelled() && needs.source-policy.result == 'success' && needs.source-policy.outputs.components == 'true' && contains(fromJSON('["success","skipped"]'), needs.ci-image.result)
     runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_serial) }}
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: ${{ fromJSON(needs.source-policy.outputs.component_suites) }}
     env:
       # Light containers drop all capabilities and the Ubuntu heavy guest restricts
       # unprivileged user namespaces; wheels still build offline from hash-verified
@@ -193,20 +204,49 @@ jobs:
             --output "${RUNNER_TEMP}/klukai-component-native" --revision "$GITHUB_SHA" \
             --tools "${RUNNER_TEMP}/klukai-component-python" \
             --bridge "${RUNNER_TEMP}/klukai-bridge-python" --github-env "$GITHUB_ENV"
-      - name: Run operations, voice and bridge in separate pytest processes
+      - name: Run the operations suite
+        if: contains(fromJSON('["all","ops"]'), matrix.suite)
         env:
           PYTHONWARNINGS: error
           PYTEST_ADDOPTS: "-o asyncio_default_fixture_loop_scope=function -o asyncio_default_test_loop_scope=function"
           PYTHONDONTWRITEBYTECODE: "1"
-        run: |
-          make test-ops test-voice TEST_PYTHON="$KLUKAI_COMPONENT_PYTHON" PYTEST_PARALLEL="-n 2"
-          make test-bridge TEST_PYTHON="$KLUKAI_BRIDGE_PYTHON"
+        run: make test-ops TEST_PYTHON="$KLUKAI_COMPONENT_PYTHON" PYTEST_PARALLEL="-n 2"
+      - name: Run the voice suite
+        if: contains(fromJSON('["all","voice"]'), matrix.suite)
+        env:
+          PYTHONWARNINGS: error
+          PYTEST_ADDOPTS: "-o asyncio_default_fixture_loop_scope=function -o asyncio_default_test_loop_scope=function"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: make test-voice TEST_PYTHON="$KLUKAI_COMPONENT_PYTHON"
+      - name: Run the bridge suite
+        if: contains(fromJSON('["all","bridge"]'), matrix.suite)
+        env:
+          PYTHONWARNINGS: error
+          PYTEST_ADDOPTS: "-o asyncio_default_fixture_loop_scope=function -o asyncio_default_test_loop_scope=function"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: make test-bridge TEST_PYTHON="$KLUKAI_BRIDGE_PYTHON"
       - name: Install locked avatar test dependencies
+        if: contains(fromJSON('["all","js"]'), matrix.suite)
         run: npm ci --prefix tools/avatar --ignore-scripts
       - name: Run companion and avatar JavaScript tests
+        if: contains(fromJSON('["all","js"]'), matrix.suite)
         run: make test-js
       - name: Check shell scripts
+        if: contains(fromJSON('["all","js"]'), matrix.suite)
         run: make test-shell
+
+  components:
+    # Keeps the gate name the deployer reads (FULL_CI_GATES) while the work fans out.
+    name: Isolated component suites
+    needs: [source-policy, ci-image, component-shards]
+    if: always() && !cancelled() && needs.source-policy.result == 'success' && needs.source-policy.outputs.components == 'true' && contains(fromJSON('["success","skipped"]'), needs.ci-image.result)
+    runs-on: ${{ fromJSON(needs.source-policy.outputs.labels_serial) }}
+    timeout-minutes: 2
+    steps:
+      - name: Require every component suite
+        env:
+          SHARDS: ${{ needs.component-shards.result }}
+        run: test "$SHARDS" = success
 
   test:
     name: Test Suite
