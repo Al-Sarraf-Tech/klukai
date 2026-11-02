@@ -171,14 +171,27 @@ def protected(paths: list[str]) -> list[str]:
 
 
 def anthropic_key() -> str:
-    """Production's own key, from the encrypted core-override, in memory only."""
+    """Production's own key, from the encrypted core-override, in memory only.
+
+    The override is a Compose file, so it is parsed the way Compose parses it:
+    as YAML, which also covers JSON, with `environment` as a mapping or a list.
+    """
     import klukai_secrets
 
     try:
-        doc = json.loads(klukai_secrets.decrypt("core-override"))
-        key = doc["services"]["companion-core"]["environment"]["ANTHROPIC_API_KEY"]
-    except (klukai_secrets.SecretError, ValueError, KeyError, TypeError) as error:
-        raise ReviewError(f"Anthropic API key unavailable: {type(error).__name__}") from error
+        import yaml
+    except ImportError:
+        raise ReviewError("Anthropic API key unavailable: PyYAML is missing") from None
+
+    try:
+        doc = yaml.safe_load(klukai_secrets.decrypt("core-override"))
+        env = doc["services"]["companion-core"]["environment"]
+        if isinstance(env, list):
+            env = dict(item.partition("=")[::2] for item in env)
+        key = env["ANTHROPIC_API_KEY"]
+    except (klukai_secrets.SecretError, yaml.YAMLError, ValueError, KeyError, TypeError, AttributeError) as error:
+        # "from None": a parser's error quotes the text around the problem, and that text holds secrets.
+        raise ReviewError(f"Anthropic API key unavailable: {type(error).__name__}") from None
     if not isinstance(key, str) or not key.strip():
         raise ReviewError("Anthropic API key unavailable")
     return key.strip()

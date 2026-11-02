@@ -258,3 +258,39 @@ def test_settings_reject_unknown_keys(tmp_path):
 def test_every_review_uses_opus_at_xhigh_by_default():
     cfg = rv.Config()
     assert (cfg.model, cfg.effort) == ("claude-opus-5-5", "xhigh")
+
+
+SECRET = "sk-ant-not-a-real-key"
+
+
+@pytest.mark.parametrize("override", [
+    # What the runbook documents: JSON.
+    '{"services": {"companion-core": {"environment": {"ANTHROPIC_API_KEY": "%s"}}}}' % SECRET,
+    # Compose reads the override as YAML, so a rotation may leave it as YAML.
+    "services:\n  companion-core:\n    environment:\n      ANTHROPIC_API_KEY: %s\n" % SECRET,
+    # Compose also allows the list form of `environment`.
+    "services:\n  companion-core:\n    environment:\n      - OTHER=1\n      - ANTHROPIC_API_KEY=%s\n" % SECRET,
+])
+def test_key_is_read_from_any_override_compose_accepts(monkeypatch, override):
+    import klukai_secrets
+
+    monkeypatch.setattr(klukai_secrets, "decrypt", lambda name: override.encode())
+    assert rv.anthropic_key() == SECRET
+
+
+@pytest.mark.parametrize("override", [
+    "services: [unclosed\n  %s" % SECRET,   # not YAML; the parser's error quotes this text
+    "just a string %s" % SECRET,
+    "services:\n  companion-core:\n    environment:\n      - %s\n" % SECRET,  # no KEY= form
+    "services:\n  companion-core:\n    environment: {}\n",
+    "",
+])
+def test_unreadable_override_fails_closed_and_never_quotes_it(monkeypatch, override):
+    import klukai_secrets
+
+    monkeypatch.setattr(klukai_secrets, "decrypt", lambda name: override.encode())
+    with pytest.raises(rv.ReviewError) as caught:
+        rv.anthropic_key()
+    assert caught.value.__cause__ is None and caught.value.__suppress_context__
+    assert SECRET not in str(caught.value)
+    assert "Anthropic API key unavailable" in str(caught.value)

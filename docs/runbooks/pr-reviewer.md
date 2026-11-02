@@ -9,7 +9,9 @@ deployer's `require_approved_pr`, so the merge then deploys by itself
   2026-10-22).
 - **API key:** the owner's existing paid Anthropic key, the one production
   uses. It is read in memory from the encrypted `core-override` and never
-  stored or logged.
+  stored or logged. The override is parsed as Compose parses it (YAML, which
+  covers JSON), so the host's `/usr/bin/python3` needs PyYAML; without it the
+  reviewer defers.
 - **Spend:** a daily cap (default 15 reviews) bounds it. Each head is reviewed
   once, and a broken reply is retried at most once.
 - **Schedule:** a timer runs `klukai-pr-reviewer.timer` every five minutes. It
