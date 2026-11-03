@@ -114,15 +114,37 @@ async def test_a_cancelled_extraction_is_requeued():
     assert calls["n"] == 2
 
 
-async def test_a_newer_turn_replaces_a_waiting_extraction():
+@pytest.mark.timeout(60)  # Hung-test backstop; quiet gaps below are event-driven.
+async def test_a_newer_turn_replaces_a_waiting_extraction(monkeypatch):
+    from types import SimpleNamespace
+
+    from app import chat_followups
+
     calls = []
+    quiet_gaps = asyncio.Queue()
+
+    async def quiet_gap(delay):
+        assert delay == 0.05
+        release = asyncio.Event()
+        quiet_gaps.put_nowait(release)
+        await release.wait()
+
+    # Replace this module's clock only: asyncio itself and test coordination
+    # keep their real behavior, without a wall-clock deadline under CI pauses.
+    monkeypatch.setattr(
+        chat_followups,
+        "asyncio",
+        SimpleNamespace(sleep=quiet_gap, create_task=asyncio.create_task),
+    )
 
     class WS:
         def __init__(self):
             self.tasks = []
+            self.owners = []
 
         def track_task(self, user_id, task, survive_disconnect=False):
             self.tasks.append(task)
+            self.owners.append((user_id, survive_disconnect))
 
     class Session:
         turns: list = []
@@ -149,10 +171,34 @@ async def test_a_newer_turn_replaces_a_waiting_extraction():
         compact_threshold=99,
         extraction_idle_s=0.05,
     )
-    await followups.admit("first private fact", "noted", Session(), "jalsarraf")
-    await followups.admit("second private fact", "noted too", Session(), "jalsarraf")
-    await asyncio.wait_for(asyncio.gather(*followups.ws.tasks), 1)
-    assert calls == ["first private fact", "second private fact"]
+    try:
+        await followups.admit("first private fact", "noted", Session(), "jalsarraf")
+        first_gap = await quiet_gaps.get()
+        await followups.admit("second private fact", "noted too", Session(), "jalsarraf")
+        assert len(followups.ws.tasks) == 1
+        assert followups.ws.owners == [("jalsarraf", True)]
+
+        first_gap.set()
+        restarted_gap = await quiet_gaps.get()
+        assert calls == []  # The newer turn invalidated the original quiet gap.
+
+        restarted_gap.set()
+        next_gap = await quiet_gaps.get()
+        assert calls == ["first private fact"]
+
+        next_gap.set()
+        final_gap = await quiet_gaps.get()
+        assert calls == ["first private fact", "second private fact"]
+
+        final_gap.set()
+        await asyncio.gather(*followups.ws.tasks)
+        assert followups._extract_runner == {}
+        assert followups._extract_queue == {}
+    finally:
+        for task in followups.ws.tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*followups.ws.tasks, return_exceptions=True)
 
 
 async def test_streamed_chunks_arrive_before_the_turn_is_done(monkeypatch):
