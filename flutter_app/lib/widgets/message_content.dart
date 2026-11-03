@@ -5,10 +5,39 @@ import '../services/markdown_parser.dart';
 import '../theme/gfl2_colors.dart';
 
 /// Selectable native layout. Parsing never owns geometry or navigation.
-class MessageContent extends StatelessWidget {
+class MessageContent extends StatefulWidget {
   const MessageContent({super.key, required this.source, this.browser});
   final String source;
   final BrowserPlatform? browser;
+
+  @override
+  State<MessageContent> createState() => _MessageContentState();
+}
+
+class _MessageContentState extends State<MessageContent> {
+  // Keep only this mounted message's current parse. Other chat updates and
+  // reflow still rebuild the layout without repeating the JS lexer/JSON work.
+  List<MarkdownToken>? _document;
+
+  @override
+  void initState() {
+    super.initState();
+    _parse();
+  }
+
+  @override
+  void didUpdateWidget(MessageContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.source != widget.source) _parse();
+  }
+
+  void _parse() {
+    _document = MarkdownToken.document(
+      widget.source,
+      parseMarkdown(widget.source),
+    );
+  }
+
   static const _style = TextStyle(
     color: GFL2Colors.textPrimary,
     fontSize: 15,
@@ -17,8 +46,8 @@ class MessageContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final document = MarkdownToken.document(source, parseMarkdown(source));
-    if (document == null) return SelectableText(source, style: _style);
+    final document = _document;
+    if (document == null) return SelectableText(widget.source, style: _style);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisSize: MainAxisSize.min,
@@ -36,7 +65,7 @@ class MessageContent extends StatelessWidget {
                 style: TextStyle(color: GFL2Colors.textMuted, fontSize: 12),
               ),
               tilePadding: EdgeInsets.zero,
-              children: [SelectableText(source, style: _style)],
+              children: [SelectableText(widget.source, style: _style)],
             ),
           ),
       ],
@@ -103,10 +132,8 @@ class MessageContent extends StatelessWidget {
       padding: const EdgeInsets.only(top: 4),
       child: safe
           ? TextButton(
-              onPressed: () => (browser ?? defaultBrowserPlatform()).openUrl(
-                uri.toString(),
-                newWindow: true,
-              ),
+              onPressed: () => (widget.browser ?? defaultBrowserPlatform())
+                  .openUrl(uri.toString(), newWindow: true),
               style: TextButton.styleFrom(
                 alignment: Alignment.centerLeft,
                 foregroundColor: GFL2Colors.primary,

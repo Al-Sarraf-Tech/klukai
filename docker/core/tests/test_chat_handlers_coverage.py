@@ -192,7 +192,6 @@ def _patched_pipeline(
         patch("app.chat_handlers.get_conn_autocommit", get_conn_autocommit),
         patch("app.chat_handlers._store_message", store_message),
         patch("app.chat_handlers._fix_narration", side_effect=lambda t: t),
-        patch("app.chat_handlers._chunk_text", side_effect=lambda t, n=8: [t]),
         patch("app.chat_handlers._wants_recall", return_value=wants_recall_val),
         patch("app.chat_handlers._wants_mission_start", return_value=False),
         patch("app.chat_handlers._wants_mission_cancel", return_value=False),
@@ -396,7 +395,7 @@ class TestAgentPath:
             await _drain_tasks()
 
         sent = [c.args[1] for c in ns.ws.send_token.call_args_list]
-        assert "".join(sent) == "Done it."  # _chunk_text stub returns whole text
+        assert "".join(sent) == "Done it."
         assert ns.ws.send_done.await_args.args[2] == "agent-model"
 
     @pytest.mark.asyncio

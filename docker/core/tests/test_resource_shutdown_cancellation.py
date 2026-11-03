@@ -30,7 +30,7 @@ class BlockingTransport(httpx.AsyncBaseTransport):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "module_name", ["weather_client"]
+    "module_name", ["weather_client", "voice_client", "extraction_llm"]
 )
 @pytest.mark.parametrize("startup_failure", [False, True])
 async def test_repeated_resource_exit_cancellation_joins_actual_lazy_transport(
@@ -55,7 +55,7 @@ async def test_repeated_resource_exit_cancellation_joins_actual_lazy_transport(
 
     exiting = asyncio.create_task(lifetime())
     try:
-        await transport.started.wait()
+        await asyncio.wait_for(transport.started.wait(), 1)
         for _ in range(3):
             exiting.cancel()
             await asyncio.sleep(0)

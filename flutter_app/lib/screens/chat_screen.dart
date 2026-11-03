@@ -569,7 +569,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         bottom: false,
         child: IndexedStack(
           index: _tab.index,
-          children: [for (final tab in HudTab.values) _tabBody(tab)],
+          children: [
+            for (final tab in HudTab.values)
+              // Keep each tab's state and async work alive without ticking
+              // animations such as Chat's ECG while the tab is hidden.
+              TickerMode(enabled: tab == _tab, child: _tabBody(tab)),
+          ],
         ),
       ),
       bottomNavigationBar: HudTabBar(current: _tab, onSelect: _selectTab),

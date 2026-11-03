@@ -50,7 +50,6 @@ async def test_reply_settles_its_warmup_notifier_on_every_exit(monkeypatch, exit
         ws,
         None,
         lambda value: value,
-        lambda value, _size: [value],
         "Communications disrupted",
     )
     reply = create_task(
@@ -129,7 +128,7 @@ async def test_reply_waits_for_started_notifier_finalizer(monkeypatch, token_cou
                 yield "Ready."
 
     runtime = ChatReplyRuntime(
-        Router(), None, Socket(), None, lambda value: value, None, "failure"
+        Router(), None, Socket(), None, lambda value: value, "failure"
     )
     reply = asyncio.create_task(
         runtime.direct(

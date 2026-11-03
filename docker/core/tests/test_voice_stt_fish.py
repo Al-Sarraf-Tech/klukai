@@ -108,8 +108,11 @@ class TestRequest:
         assert "model" not in form  # the model belongs in the header
         # A dedicated client: no proxies from the environment, no redirects.
         assert fish.built == [
-            {"timeout": 30.0, "trust_env": False, "follow_redirects": False}
+            {"timeout": 60.0, "trust_env": False, "follow_redirects": False}
         ]
+        assert request.extensions["timeout"] == {
+            "connect": 30.0, "read": 30.0, "write": 30.0, "pool": 30.0
+        }
 
     @pytest.mark.parametrize(
         ("given", "sent"),
@@ -213,6 +216,7 @@ class TestErrors:
             with _Fish(reply):
                 with pytest.raises(SpeechToTextError):
                     await voice_client.transcribe(TAKE_B64)
+            await voice_client.close()  # The next case installs another fake peer.
         assert "HTTP 400 (audio_too_short)" in caplog.text
         assert "HTTP 400 (-)" in caplog.text
         assert "HTTP 413 (-)" in caplog.text
@@ -334,6 +338,7 @@ class TestNoSecretsInLogs:
                     await voice_client.transcribe(TAKE_B64, language="en")
                 except SpeechToTextError:
                     pass
+            await voice_client.close()  # Each outcome owns its fake transport.
         assert caplog.records, "expected the failures to be logged"
         for secret in (KEY, SPOKEN, TAKE_B64, "opus-take-bytes"):
             assert secret not in caplog.text

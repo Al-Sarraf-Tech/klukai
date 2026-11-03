@@ -38,7 +38,6 @@ from .helpers import (
     SAVE_KEYWORDS,
     DISCARD_KEYWORDS,
     TRIVIAL_PATTERNS,
-    chunk_text as _chunk_text,
     fix_narration as _fix_narration,
     wants_recall as _wants_recall,
     wants_mission_start as _wants_mission_start,
@@ -377,7 +376,6 @@ async def _handle_message(
             ws,
             AgentLoop,
             _fix_narration,
-            _chunk_text,
             _FAILURE_PREFIX,
             on_completed=capture_completed_reply,
         )

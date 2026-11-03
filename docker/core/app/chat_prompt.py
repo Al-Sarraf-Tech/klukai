@@ -134,6 +134,10 @@ class ChatPromptBuilder:
 
         from .context import physical
         from . import tributes
+        from .conversation_continuity import (
+            load_recent_assistant_replies,
+            merge_recent_replies,
+        )
         from .helpers import wants_dream_inquiry
 
         async def _jokes() -> list[Any]:
@@ -151,6 +155,8 @@ class ChatPromptBuilder:
             inside_jokes,
             crown_jewel,
             outfit,
+            stored_replies,
+            presence_block,
         ) = await _together(
             self.recall_and_nudge(
                 content, skip_recall, aff_state.level, user_id, session.turn_count
@@ -163,6 +169,8 @@ class ChatPromptBuilder:
             self.wardrobe_turn(
                 content, session, user_id, aff_state.level, mission_desc
             ),
+            load_recent_assistant_replies(user_id, 20),
+            self.presence("", aff_state, user_id),
             defaults=(
                 (([], {}, []), None),
                 ("normal", ""),
@@ -171,13 +179,11 @@ class ChatPromptBuilder:
                 [],
                 None,
                 OutfitContext(None, None, None, ""),
+                [],
+                "",
             ),
         )
         (episode_memories, rel_facts, recalled_exchanges), nudge = recalled_pair
-        from .conversation_continuity import (
-            load_recent_assistant_replies,
-            merge_recent_replies,
-        )
         from .personality.memory_blocks import (
             drop_repeated_memories,
             drop_repeated_replies,
@@ -188,7 +194,6 @@ class ChatPromptBuilder:
             for turn in reversed(session.turns)
             if turn.get("role") == "assistant"
         ]
-        stored_replies = await load_recent_assistant_replies(user_id, 20)
         recent_replies = merge_recent_replies(session_replies, stored_replies, limit=20)
         episode_memories = drop_repeated_memories(episode_memories, recent_replies)
         recalled_exchanges = drop_repeated_replies(recalled_exchanges, recent_replies)
@@ -236,7 +241,7 @@ class ChatPromptBuilder:
             tail = full[len(stable) :].lstrip("\n")
         else:
             tail = full
-        tail = await self.presence(tail, aff_state, user_id)
+        tail += presence_block
         tail = await self.append_blocks(
             tail,
             content,

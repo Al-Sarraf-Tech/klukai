@@ -191,7 +191,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from .rate_limit import close as _rate_limit_close
     from .observability.health_cache import running as _health_checks_running
     from .runtime_tasks import running as _application_work
-    from . import weather_client
+    from . import extraction_llm, voice_client, weather_client
 
     async with _application_work(ws) as (cleanup, owners):
         # Register before each init: clients/pool workers can exist even when
@@ -200,6 +200,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         cleanup.push_async_callback(_caches_close)
         cleanup.push_async_callback(_rate_limit_close)
         cleanup.push_async_callback(weather_client.close)
+        cleanup.push_async_callback(voice_client.close)
+        cleanup.push_async_callback(extraction_llm.close)
         await cleanup.enter_async_context(_health_checks_running())
         await init_pool(min_size=2, max_size=10)
         await run_migration()
@@ -233,8 +235,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             proactive.set_affection_level(state.level, user_id=PRIMARY_USER)
         except Exception as exc:
             logger.warning("Proactive level not restored (%s)", type(exc).__name__)
-
-        from . import extraction_llm
 
         logger.info("%s", extraction_llm.startup_line())
         task = asyncio.create_task(_session_cleanup_loop(), name="session-cleanup")

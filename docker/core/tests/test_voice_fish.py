@@ -45,6 +45,8 @@ class _Clients:
         client = MagicMock()
         client.__aenter__ = AsyncMock(return_value=client)
         client.__aexit__ = AsyncMock(return_value=False)
+        client.is_closed = False
+        client.aclose = AsyncMock()
         client.post = AsyncMock(side_effect=AssertionError("network used directly"))
         return client
 

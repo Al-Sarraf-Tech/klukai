@@ -36,7 +36,6 @@ class ChatReplyRuntime:
     ws: WSManager
     agent_factory: Callable[[LLMRouter, MCPClient, WSManager], AgentLoop]
     fix_narration: Callable[[str], str]
-    chunk_text: Callable[[str, int], list[str]]
     failure_prefix: str
     on_completed: Callable[[ChatReply], None] | None = None
 
@@ -76,10 +75,9 @@ class ChatReplyRuntime:
             response_text = FAILURE_SENTINEL
         model_name = agent_result.model
 
-        # Stream the final response token by token for the UI
-        for token in self.chunk_text(response_text, 8):
-            await self.ws.send_token(user_id, token)
-            await asyncio.sleep(0.02)
+        # The agent has already completed and validated this answer. Deliver
+        # it like a buffered direct reply, without replaying artificial typing.
+        await self.ws.send_token(user_id, response_text)
 
         latency_ms = int((time.monotonic() - start) * 1000)
         failed = response_text.startswith(self.failure_prefix)

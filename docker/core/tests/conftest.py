@@ -240,3 +240,15 @@ def isolate_dependency_breakers():
     _BREAKERS.clear()
     yield
     _BREAKERS.clear()
+
+
+@pytest.fixture(autouse=True)
+async def close_provider_http_clients():
+    """Unit cases have separate event loops; retire their lazy provider pools."""
+    from app import extraction_llm, voice_client
+
+    yield
+    try:
+        await voice_client.close()
+    finally:
+        await extraction_llm.close()

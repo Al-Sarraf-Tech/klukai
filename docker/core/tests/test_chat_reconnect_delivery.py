@@ -9,7 +9,7 @@ import pytest
 
 from app.agent_loop import AgentResult
 from app.chat_reply import ChatReplyRuntime
-from app.helpers import chunk_text, fix_narration
+from app.helpers import fix_narration
 from app.llm_router import FAILURE_SENTINEL
 from app.models import LLMConfig, SessionState
 from app.ws_manager import WSManager
@@ -60,7 +60,6 @@ async def test_device_joining_mid_reply_receives_complete_final_text(route, chur
         manager,
         MagicMock(return_value=agent),
         fix_narration,
-        chunk_text,
         FAILURE_SENTINEL.split(",", 1)[0],
     )
     task = asyncio.create_task(
@@ -84,9 +83,14 @@ async def test_device_joining_mid_reply_receives_complete_final_text(route, chur
         tail = "".join(
             event["text"] for event in late.output if event["type"] == "token"
         )
-        assert tail and tail != text, (
-            "fixture must actually omit the already-delivered prefix"
-        )
+        if route == "agent":
+            # Buffered tool replies are now delivered in one frame. The late
+            # device misses that frame entirely and recovers through done.
+            assert tail == ""
+        else:
+            assert tail and tail != text, (
+                "fixture must actually omit the already-delivered prefix"
+            )
         done = [event for event in late.output if event["type"] == "done"]
         assert len(done) == 1
         assert done[0].get("text") == text, (
@@ -129,7 +133,6 @@ async def test_interrupted_direct_reply_does_not_publish_incomplete_final_text(f
         manager,
         MagicMock(),
         fix_narration,
-        chunk_text,
         FAILURE_SENTINEL.split(",", 1)[0],
     )
     task = asyncio.create_task(
@@ -179,7 +182,6 @@ async def test_cancelled_agent_delivery_does_not_emit_done():
         manager,
         MagicMock(return_value=agent),
         fix_narration,
-        chunk_text,
         FAILURE_SENTINEL.split(",", 1)[0],
     )
     task = asyncio.create_task(

@@ -24,12 +24,14 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from http.cookiejar import DefaultCookiePolicy
 from typing import Any
 
 import httpx
 
 from .creative_budget import CreativeBudgetError, record_usage, reserve_attempt
 from .dependencies import http_stream
+from .shared_http import client as http_client, close as close_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,25 @@ _warned: set[str] = set()
 _cap_logged_day: str | None = None
 _gate = asyncio.Semaphore(2)
 _claude_gate = asyncio.Semaphore(2)
+_http: httpx.AsyncClient | None = None
+
+
+def _get_http() -> httpx.AsyncClient:
+    """A dedicated Haiku pool, with request-local credentials and time budgets."""
+    global _http
+    if _http is None or _http.is_closed:
+        _http = http_client(
+            _http, timeout=REQUEST_TIMEOUT_S, trust_env=False, follow_redirects=False
+        )
+        # Keep the old per-call cookie isolation, including across key rotation.
+        _http.cookies.jar.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+    return _http
+
+
+async def close() -> None:
+    global _http
+    client, _http = _http, None
+    await close_http_client(client)
 
 
 @dataclass
@@ -254,24 +275,21 @@ async def complete_claude(
     try:
         async with _claude_gate:
             async with asyncio.timeout(budget):
-                # A dedicated client: canonical endpoint, no redirects or proxy.
-                async with httpx.AsyncClient(
+                async with http_stream(
+                    CLAUDE_BREAKER,
+                    _get_http(),
+                    "POST",
+                    MESSAGES_URL,
+                    json=body,
                     headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
                     timeout=httpx.Timeout(budget, connect=5.0),
-                    trust_env=False,
-                    follow_redirects=False,
-                ) as client:
-                    async with http_stream(
-                        CLAUDE_BREAKER, client, "POST", MESSAGES_URL, json=body
-                    ) as result:
-                        result.raise_for_status()
-                        raw = bytearray()
-                        async for chunk in result.aiter_bytes():
-                            raw.extend(chunk)
-                            if len(raw) > _MAX_RESPONSE_BYTES:
-                                raise ExtractionLLMError(
-                                    "Haiku reply exceeds size limit"
-                                )
+                ) as result:
+                    result.raise_for_status()
+                    raw = bytearray()
+                    async for chunk in result.aiter_bytes():
+                        raw.extend(chunk)
+                        if len(raw) > _MAX_RESPONSE_BYTES:
+                            raise ExtractionLLMError("Haiku reply exceeds size limit")
         text, used_model, usage = _visible_text(json.loads(raw))
     except ExtractionLLMError:
         raise

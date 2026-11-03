@@ -29,7 +29,6 @@ async def test_each_delta_is_sent_without_waiting_for_a_sentence():
         ws,
         MagicMock(),
         lambda text: text.replace("(You ", "(I "),
-        lambda text, n=8: [text],
         "...",
     )
     reply = await runtime.direct(

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+from http.cookiejar import DefaultCookiePolicy
 import json
 import logging
 import math
@@ -26,6 +27,7 @@ from typing import Any
 import httpx
 
 from .dependencies import http_request, http_stream
+from .shared_http import client as http_client, close as close_http_client
 
 MAX_AUDIO_BYTES = 6 * 1024 * 1024
 logger = logging.getLogger(__name__)
@@ -80,6 +82,25 @@ FISH_LANGUAGES = frozenset({"en", "ja"})
 FISH_TTS_TIMEOUT = 60.0
 FISH_OFF_MESSAGE = "Voice is not configured"
 _FISH_FAILED_MESSAGE = "Voice service unavailable"
+_http: httpx.AsyncClient | None = None
+
+
+def _get_http() -> httpx.AsyncClient:
+    """Reuse Fish connections; credentials and deadlines stay on each request."""
+    global _http
+    if _http is None or _http.is_closed:
+        _http = http_client(
+            _http, timeout=FISH_TTS_TIMEOUT, trust_env=False, follow_redirects=False
+        )
+        # Disposable clients never carried provider cookies into the next call.
+        _http.cookies.jar.set_policy(DefaultCookiePolicy(allowed_domains=[]))
+    return _http
+
+
+async def close() -> None:
+    global _http
+    client, _http = _http, None
+    await close_http_client(client)
 
 
 def fish_configured() -> bool:
@@ -142,18 +163,15 @@ async def post_tts(
     }
     headers = {"Authorization": f"Bearer {key}", "model": model}
     deadline = min(timeout or FISH_TTS_TIMEOUT, FISH_TTS_TIMEOUT)
-    async with httpx.AsyncClient(
-        timeout=deadline, trust_env=False, follow_redirects=False
-    ) as fish:
-        response = await http_request(
-            "voice",
-            fish,
-            "post",
-            FISH_TTS_URL,
-            json=body,
-            headers=headers,
-            timeout=deadline,
-        )
+    response = await http_request(
+        "voice",
+        _get_http(),
+        "post",
+        FISH_TTS_URL,
+        json=body,
+        headers=headers,
+        timeout=deadline,
+    )
     if response.status_code != 200:
         logger.warning("Fish TTS HTTP %s", response.status_code)
         return _fish_response(502, _FISH_FAILED_MESSAGE)
@@ -311,25 +329,21 @@ async def transcribe(audio_b64: str, *, language: str | None = None) -> dict[str
     headers = {"Authorization": f"Bearer {key}", "model": FISH_ASR_MODEL}
     try:
         async with asyncio.timeout(FISH_STT_TIMEOUT):
-            async with httpx.AsyncClient(
-                timeout=FISH_STT_TIMEOUT, trust_env=False, follow_redirects=False
-            ) as fish:
-                async with http_stream(
-                    "voice",
-                    fish,
-                    "POST",
-                    FISH_ASR_URL,
-                    data=form,
-                    files={"audio": ("audio", audio, "application/octet-stream")},
-                    headers=headers,
-                ) as response:
-                    status = response.status_code
-                    limit = (
-                        MAX_STT_RESPONSE_BYTES
-                        if status == 200
-                        else _MAX_STT_ERROR_BYTES
-                    )
-                    body = await _read_capped(response, limit)
+            async with http_stream(
+                "voice",
+                _get_http(),
+                "POST",
+                FISH_ASR_URL,
+                data=form,
+                files={"audio": ("audio", audio, "application/octet-stream")},
+                headers=headers,
+                timeout=FISH_STT_TIMEOUT,
+            ) as response:
+                status = response.status_code
+                limit = (
+                    MAX_STT_RESPONSE_BYTES if status == 200 else _MAX_STT_ERROR_BYTES
+                )
+                body = await _read_capped(response, limit)
     except (httpx.HTTPError, TimeoutError) as exc:
         logger.warning("Fish speech-to-text unavailable: %s", type(exc).__name__)
         raise SpeechToTextError(503, _FISH_FAILED_MESSAGE) from exc

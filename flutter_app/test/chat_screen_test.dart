@@ -3271,6 +3271,126 @@ void main() {
       fake.dispose();
     });
 
+    testWidgets('inactive Chat pauses ECG ticks and resumes the same trace', (
+      tester,
+    ) async {
+      await _pumpChat(tester, wardrobe: FakeWardrobeService());
+      await settle(tester);
+      final ecg = find.byType(HudEcg, skipOffstage: false);
+      final traceState = tester.state(ecg);
+      final painter = tester
+          .widget<CustomPaint>(
+            find.descendant(
+              of: ecg,
+              matching: find.byType(CustomPaint, skipOffstage: false),
+            ),
+          )
+          .painter!;
+      var ticks = 0;
+      void countTick() => ticks++;
+      painter.addListener(countTick);
+      try {
+        Future<int> measureTicks() async {
+          ticks = 0;
+          for (var i = 0; i < 120; i++) {
+            await tester.pump(const Duration(milliseconds: 16));
+          }
+          return ticks;
+        }
+
+        final visibleTicks = await measureTicks();
+        expect(visibleTicks, 120);
+        await tester.tap(find.byKey(const Key('hud-tab-day')));
+        await settle(tester);
+        final hiddenTicks = await measureTicks();
+        // Chrome's runner can omit debugPrint and Flutter exception details.
+        // ignore: avoid_print
+        print(
+          'ECG ticks per 120 frames: visible=$visibleTicks hidden=$hiddenTicks',
+        );
+        expect(
+          hiddenTicks,
+          0,
+          reason: 'An invisible trace must not keep requesting frame work.',
+        );
+        await tester.tap(find.byKey(const Key('hud-tab-chat')));
+        await settle(tester);
+        expect(tester.state(ecg), same(traceState));
+        final resumedTicks = await measureTicks();
+        expect(resumedTicks, 120);
+        // A deterministic animation-work count, not a device FPS measurement.
+        // ignore: avoid_print
+        print(
+          'ECG ticks per 120 frames: '
+          'visible=$visibleTicks hidden=$hiddenTicks resumed=$resumedTicks',
+        );
+      } catch (error) {
+        // ignore: avoid_print
+        print('ECG_FAILURE: $error');
+        rethrow;
+      } finally {
+        painter.removeListener(countTick);
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    });
+
+    testWidgets(
+      'hidden Chat receives reply and heartbeat without losing draft',
+      (tester) async {
+        try {
+          final fake = await _pumpChat(
+            tester,
+            wardrobe: FakeWardrobeService(),
+            browser: FakeBrowserPlatform(),
+          );
+          await settle(tester);
+          final chatState = tester.state(find.byType(ChatScreen));
+          await tester.enterText(find.byType(TextField), 'Keep this draft');
+          tester.widget<TextField>(find.byType(TextField)).focusNode!.unfocus();
+          await tester.tap(find.byKey(const Key('hud-tab-day')));
+          await settle(tester);
+          fake.emit({'type': 'token', 'text': 'A partial reply'});
+          await settle(tester);
+          fake.emit({'type': 'token', 'text': ' received out of view'});
+          fake.emit({
+            'type': 'done',
+            'text': 'The complete canonical reply.',
+            'model': 'test-model',
+          });
+          fake.emit({'type': 'heartbeat', 'bpm': 97});
+          await settle(tester);
+          await tester.tap(find.byKey(const Key('hud-tab-chat')));
+          await settle(tester);
+
+          expect(tester.state(find.byType(ChatScreen)), same(chatState));
+          expect(find.text('The complete canonical reply.'), findsOneWidget);
+          expect(find.textContaining('A partial reply'), findsNothing);
+          expect(find.byType(MessageBubble), findsOneWidget);
+          final message = tester.widget<MessageBubble>(
+            find.byType(MessageBubble),
+          );
+          expect(message.message.isStreaming, isFalse);
+          expect(message.message.model, 'test-model');
+          expect(tester.widget<HudEcg>(find.byType(HudEcg)).bpm, 97);
+          final composer = tester.widget<TextField>(find.byType(TextField));
+          expect(composer.controller!.text, 'Keep this draft');
+          expect(composer.readOnly, isFalse);
+          expect(
+            tester
+                .widget<ChatComposerBar>(find.byType(ChatComposerBar))
+                .disabled,
+            isFalse,
+          );
+          await tester.pumpWidget(const SizedBox.shrink());
+        } catch (error) {
+          // Chrome's runner can omit Flutter's exception details from stdout.
+          // ignore: avoid_print
+          print('HIDDEN_CHAT_FAILURE: $error');
+          rethrow;
+        }
+      },
+    );
+
     testWidgets('another tab tears the stage down; Chat brings it back', (
       tester,
     ) async {
