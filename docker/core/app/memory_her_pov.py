@@ -172,6 +172,13 @@ _STALE_JOB_MINUTES = 20
 # Tighter bound for the worker: a bridge redelivery (JOB_RUN_TIMEOUT=900s)
 # may only take over an in-progress claim once its heartbeat is this old.
 _STALE_CLAIM_MINUTES = 15
+# A queued job nobody picked up in this long (the bridge is down or the hint
+# was lost) is failed as undispatched, so the button unlocks. Nothing ran, so
+# nothing was billed.
+_UNDISPATCHED_MINUTES = 30
+# Hard ceiling: past this a job is failed even while some picture is in
+# flight. Every render deadline in the stack ends well before it.
+_HARD_STALE_MINUTES = 45
 
 
 async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
@@ -181,7 +188,9 @@ async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
     including when the picture is paid, unless a picture is still in flight.
     Failing a live render and starting another would bill twice. Once the
     picture is gone, the old row is failed and the next tap is a new request.
-    Queued work is left for the reconciler, at any age.
+    A hung picture holds a row for at most ``_HARD_STALE_MINUTES``. Queued
+    work nobody claimed is left for the reconciler for
+    ``_UNDISPATCHED_MINUTES``, then failed as undispatched.
     """
     try:
         from .db import get_pool
@@ -192,23 +201,32 @@ async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
     try:
         from .db import get_conn, get_conn_autocommit
 
-        stale = []
-        if _paid_picture_in_flight():
+        in_flight = _paid_picture_in_flight()
+        if in_flight:
             logger.info("her_pov left the paid job; a picture is still in flight")
-        else:
-            async with get_conn_autocommit() as conn:
-                stale = await (
-                    await conn.execute(
-                        "UPDATE companion_her_pov_jobs "
-                        "SET status = 'failed', phase = 'failed', error = 'stale', "
-                        "    finished_at = NOW(), updated_at = NOW() "
-                        "WHERE user_id = %s AND status NOT IN ('done', 'failed') "
-                        "  AND status <> 'queued' "
-                        "  AND updated_at < NOW() - %s * INTERVAL '1 minute' "
-                        "RETURNING id",
-                        (user_id, _STALE_JOB_MINUTES),
-                    )
-                ).fetchall()
+        async with get_conn_autocommit() as conn:
+            stale = await (
+                await conn.execute(
+                    "UPDATE companion_her_pov_jobs "
+                    "SET status = 'failed', phase = 'failed', "
+                    "    error = CASE WHEN status = 'queued' AND claimed_at IS NULL "
+                    "                  AND attempts = 0 "
+                    "             THEN 'undispatched' ELSE 'stale' END, "
+                    "    finished_at = NOW(), updated_at = NOW() "
+                    "WHERE user_id = %s AND status NOT IN ('done', 'failed') "
+                    "  AND ((status = 'queued' AND claimed_at IS NULL AND attempts = 0 "
+                    "        AND created_at < NOW() - %s * INTERVAL '1 minute') "
+                    "    OR ((status <> 'queued' OR claimed_at IS NOT NULL "
+                    "         OR attempts > 0) "
+                    "        AND updated_at < NOW() - %s * INTERVAL '1 minute')) "
+                    "RETURNING id, error",
+                    (
+                        user_id,
+                        _UNDISPATCHED_MINUTES,
+                        _HARD_STALE_MINUTES if in_flight else _STALE_JOB_MINUTES,
+                    ),
+                )
+            ).fetchall()
         if stale:
             stale_ids = {str(r[0]) for r in stale}
             logger.warning(
@@ -223,10 +241,11 @@ async def _claim_active_from_db(user_id: str) -> dict[str, Any] | None:
             async with _JOBS_LOCK:
                 if _ACTIVE_JOB_BY_USER.get(user_id) in stale_ids:
                     _ACTIVE_JOB_BY_USER.pop(user_id, None)
-                for jid in stale_ids:
-                    job = _JOBS.get(jid)
+                for hit in stale:
+                    job = _JOBS.get(str(hit[0]))
+                    reason = hit[1] if len(hit) > 1 and hit[1] else "stale"
                     if job and job.get("status") not in ("done", "failed"):
-                        job.update(status="failed", phase="failed", error="stale")
+                        job.update(status="failed", phase="failed", error=reason)
         async with get_conn() as conn:
             row = await (
                 await conn.execute(

@@ -268,7 +268,8 @@ async def test_cloud_pov_live_inflight_job_is_reused(writer):
     sweep_sql, sweep_params = conn.calls[0]
     assert "status = 'failed'" in sweep_sql
     assert "status <> 'queued'" in sweep_sql
-    assert sweep_params == ("alice", hp._STALE_JOB_MINUTES)
+    assert "'undispatched'" in sweep_sql
+    assert sweep_params == ("alice", hp._UNDISPATCHED_MINUTES, hp._STALE_JOB_MINUTES)
     assert conn.calls[1][0].lstrip().startswith("SELECT")
 
 
@@ -296,7 +297,7 @@ async def test_cloud_pov_stale_job_unlocks_the_next_request(writer):
     finally:
         hp._ACTIVE_JOB_BY_USER.pop("alice", None)
         hp._JOBS.pop(stale_id, None)
-    assert "error = 'stale'" in conn.calls[0][0]
+    assert "'stale'" in conn.calls[0][0]
 
 
 @pytest.mark.asyncio
@@ -305,10 +306,12 @@ async def test_cloud_pov_stale_job_unlocks_the_next_request(writer):
     ["generation", "background", "lock"],
 )
 async def test_cloud_pov_in_flight_picture_is_not_failed(writer, held):
-    """A live paid render is not failed, so the next tap does not buy another."""
+    """A live paid render is not failed, so the next tap does not buy another.
+
+    Only the hard ceiling (and an undispatched queued row) applies then."""
     from app import memory_her_pov as hp
 
-    conn = _RailConn(results=[[("job", "drawing")]])
+    conn = _RailConn(results=[[], [("job", "drawing")]])
     patches = _patch_rail(conn)
     with (
         patches[0],
@@ -329,8 +332,32 @@ async def test_cloud_pov_in_flight_picture_is_not_failed(writer, held):
     ):
         result = await hp._claim_active_from_db("alice")
     assert result == {"job_id": "job", "status": "drawing", "reused": True}
-    assert conn.calls[0][0].lstrip().startswith("SELECT")
-    assert not any("status = 'failed'" in sql for sql, _ in conn.calls)
+    assert conn.calls[0][1] == ("alice", hp._UNDISPATCHED_MINUTES, hp._HARD_STALE_MINUTES)
+    assert hp._HARD_STALE_MINUTES > hp._STALE_JOB_MINUTES
+    assert conn.calls[1][0].lstrip().startswith("SELECT")
+
+
+@pytest.mark.asyncio
+async def test_cloud_pov_an_undispatched_job_unlocks_the_button(writer):
+    """A queued job the bridge never picked up fails as undispatched."""
+    from app import memory_her_pov as hp
+
+    queued = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    hp._ACTIVE_JOB_BY_USER["alice"] = queued
+    hp._JOBS[queued] = {"id": queued, "user_id": "alice", "status": "queued"}
+    conn = _RailConn(results=[[(queued, "undispatched")], []])
+    patches = _patch_rail(conn)
+    try:
+        with patches[0], patches[1], patches[2]:
+            assert await hp._claim_active_from_db("alice") is None
+        assert "alice" not in hp._ACTIVE_JOB_BY_USER
+        assert hp._JOBS[queued]["error"] == "undispatched"
+    finally:
+        hp._ACTIVE_JOB_BY_USER.pop("alice", None)
+        hp._JOBS.pop(queued, None)
+    sql = conn.calls[0][0]
+    assert "status = 'queued' AND claimed_at IS NULL AND attempts = 0" in sql
+    assert "created_at < NOW() - %s * INTERVAL '1 minute'" in sql
 
 
 @pytest.mark.asyncio

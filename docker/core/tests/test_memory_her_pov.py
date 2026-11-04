@@ -1143,11 +1143,11 @@ class TestClaimActiveFromDb:
         sweep_sql, sweep_params = conn.calls[0]
         assert sweep_sql.lstrip().startswith("UPDATE companion_her_pov_jobs")
         assert "status = 'failed'" in sweep_sql
-        assert "error = 'stale'" in sweep_sql
+        assert "'stale'" in sweep_sql and "'undispatched'" in sweep_sql
         assert "finished_at = NOW()" in sweep_sql
         assert "status NOT IN ('done', 'failed')" in sweep_sql
         assert "updated_at < NOW() - %s * INTERVAL '1 minute'" in sweep_sql
-        assert sweep_params == ("claude", hp._STALE_JOB_MINUTES)
+        assert sweep_params == ("claude", hp._UNDISPATCHED_MINUTES, hp._STALE_JOB_MINUTES)
         assert hp._STALE_JOB_MINUTES == 20
         # ...and only then the active-row lookup.
         select_sql, _ = conn.calls[1]

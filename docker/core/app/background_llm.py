@@ -3,8 +3,9 @@
 Every non-interactive text/JSON call in the core goes through ``text()`` or
 ``json_object()``. Owner decision 2026-11-01: with Claude switched on, that call
 is Claude Haiku 5.5 at low effort. If Haiku fails or returns nothing usable, it
-goes to Grok 4.7 at low effort through the host CLI. Her POV stories try the xAI
-API before either. ``KLUKAI_EXTRACTION_DAILY_LIMIT`` reserves one UTC-day attempt
+goes to Grok 4.7 at low effort through the host CLI. Her POV stories and episode
+summaries try the xAI API first; once it was tried they go to the CLI, so one
+story is never billed by two providers. ``KLUKAI_EXTRACTION_DAILY_LIMIT`` reserves one UTC-day attempt
 before each request. If everything is unavailable, capped, fails or returns
 nothing usable, the caller gets its safe default. There is no local model.
 
@@ -196,8 +197,9 @@ async def _route(
     requeue: bool = False,
 ) -> _T | None:
     report = report if report is not None else CallReport()
+    api_reason: str | None = None
     if caller in _API_CALLERS:
-        api_result, _api_reason = await _from_api(
+        api_result, api_reason = await _from_api(
             caller, prompt, system=system, convert=convert
         )
         if api_result is not None:
@@ -214,7 +216,9 @@ async def _route(
             )
             return api_result
     budget = haiku_max_tokens or haiku_budget(max_tokens)
-    if extraction_llm.uses_anthropic():
+    # A story or summary the xAI API already took (and may have billed) goes
+    # to the CLI, never to a second paid provider (owner design: xAI, then CLI).
+    if extraction_llm.uses_anthropic() and api_reason is None:
         claude_result = await _from_claude(
             caller,
             prompt,
