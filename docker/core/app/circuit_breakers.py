@@ -66,6 +66,21 @@ class BreakerConfig:
                 window_seconds=10,
                 probe_interval_seconds=15,
             ),
+            # Chat pace (owner, 2026-11-04): two bad turns in five minutes
+            # send chat to the next tier at once, and one probe a minute
+            # tries the provider again.
+            "anthropic": cls(
+                name="anthropic",
+                error_threshold=2,
+                window_seconds=300,
+                probe_interval_seconds=60,
+            ),
+            "xai_chat": cls(
+                name="xai_chat",
+                error_threshold=2,
+                window_seconds=300,
+                probe_interval_seconds=60,
+            ),
             "voice": cls(
                 name="voice",
                 error_threshold=5,

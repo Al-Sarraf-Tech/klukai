@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from app import llm_router as lr
+from tests.anthropic_sse import respond
 from app.agent_loop import AgentLoop
 from app.grok_chat import Turn
 from app.models import SessionState
@@ -99,7 +100,7 @@ async def test_the_request_is_haiku_at_xhigh_with_adaptive_thinking(router):
 
     def handler(request):
         seen.append(json.loads(request.content))
-        return httpx.Response(200, json=reply())
+        return respond(request, reply())
 
     await transport(router, handler)
     config = await router.route("hi", SessionState(conversation_id="c"), interactive=True)

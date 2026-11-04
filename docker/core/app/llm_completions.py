@@ -11,6 +11,7 @@ import logging
 import time
 import httpx
 from .models import LLMConfig
+from .circuit_breakers import CircuitOpen
 from .dependencies import http_stream, json_object
 from .anthropic_messages import (
     completion_message,
@@ -55,6 +56,56 @@ def _grok_tool_calls(
     return calls
 
 
+def split_prompt(
+    system_prompt: str, messages: list[dict[str, Any]]
+) -> tuple[str, list[dict[str, str]], str, str]:
+    """(persona, turns, turn state, flat prompt) for a cache-friendly request.
+
+    The byte-stable persona goes first, then the real turns, then everything
+    that changes each turn: the per-turn prompt blocks and any system notes
+    (the earlier-conversation summary). Logs the prefix hashes, never text.
+    """
+    lines = []
+    turns: list[dict[str, str]] = []
+    notes: list[str] = []
+    for message in messages:
+        content = message.get("content", "")
+        if isinstance(content, list):
+            content = " ".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        text_line = content if isinstance(content, str) else str(content)
+        role = message.get("role")
+        if role == "system" and text_line.strip():
+            notes.append(text_line.strip())
+        elif role in {"user", "assistant"} and text_line.strip():
+            turns.append({"role": role, "content": text_line.strip()})
+        lines.append(f"{role or 'user'}: {text_line}")
+    prompt = "\n".join(lines).strip() or "."
+    stable = getattr(system_prompt, "stable", "") or ""
+    full = str(system_prompt)
+    if isinstance(stable, str) and stable:
+        # The persona is sent on its own even if a later edit stopped it
+        # being a textual prefix of the whole prompt.
+        if full.startswith(stable):
+            persona, turn_state = stable, full[len(stable) :].lstrip("\n")
+        else:
+            persona, turn_state = stable, full
+    else:
+        persona, turn_state = full, ""
+    history_prefix = "\n".join(f"{turn['role']}\n{turn['content']}" for turn in turns)
+    logger.info(
+        "chat cache sha system=%s history=%s turns=%d",
+        hashlib.sha256(persona.encode()).hexdigest()[:16],
+        hashlib.sha256(history_prefix.encode()).hexdigest()[:16],
+        len(turns),
+    )
+    if notes:
+        turn_state = "\n\n".join([*notes, turn_state] if turn_state else notes)
+    return persona, turns, turn_state, prompt
+
+
 class LLMCompletionsMixin(ABC):
     _anthropic_http: httpx.AsyncClient | None
     _anthropic_gate: asyncio.Semaphore
@@ -76,33 +127,76 @@ class LLMCompletionsMixin(ABC):
     ) -> AsyncIterator[str]:
         """Answer with the selected model; a Claude failure falls back to Grok.
 
-        A Claude answer is buffered and validated before anything is yielded,
-        so a failure can fall back to the Grok stream without concatenating two
-        answers. If no model answers, FAILURE_SENTINEL is the whole response.
+        Claude's visible text streams as it arrives. A failure before its
+        first text falls back to the Grok stream (the xAI API, then the CLI);
+        a failure after it raises LLMStreamFailed, so two answers are never
+        concatenated. If no model answers, FAILURE_SENTINEL is the whole
+        response.
         """
-        from .llm_router import FAILURE_SENTINEL
+        from .llm_router import FAILURE_SENTINEL, LLMStreamFailed
 
         if config.provider == "grok":
             async for piece in self._stream_grok(system_prompt, messages):
                 yield piece
             return
+        if config.provider != "anthropic" or self._anthropic_http is None:
+            yield FAILURE_SENTINEL
+            return
+        yielded = False
         try:
-            response = await self._complete_with_fallback(
-                system_prompt, messages, config, grok_fallback=False
-            )
-        except _RETRYABLE as exc:
-            if config.provider != "anthropic" or self._anthropic_http is None:
-                yield FAILURE_SENTINEL
-                return
-            # Nothing was yielded yet. Never log bodies, prompts or headers.
-            logger.warning(
-                "Claude chat failed (%s); answering with Grok", type(exc).__name__
-            )
-            self._select_grok(config)
-            async for piece in self._stream_grok(system_prompt, messages):
+            async for piece in self._stream_claude(system_prompt, messages, config):
+                yielded = True
                 yield piece
             return
-        yield response["choices"][0]["message"]["content"]
+        except (*_RETRYABLE, CircuitOpen) as exc:
+            if yielded:
+                raise LLMStreamFailed("Claude chat failed") from exc
+            # Nothing was yielded yet. Never log bodies, prompts or headers.
+            logger.warning(
+                "Claude chat failed (%s, HTTP %s); answering with Grok",
+                type(exc).__name__,
+                getattr(exc, "status", None),
+            )
+        self._select_grok(config)
+        async for piece in self._stream_grok(system_prompt, messages):
+            yield piece
+
+    async def _stream_claude(
+        self, system_prompt: str, messages: list[dict[str, Any]], config: LLMConfig
+    ) -> AsyncIterator[str]:
+        from .anthropic_chat import AnthropicChatError, chat_body, stream_text
+        from .llm_router import (
+            ANTHROPIC_MESSAGES_URL,
+            CHAT_MAX_TOKENS,
+            MODEL_EFFORT,
+            model_family,
+        )
+
+        family = model_family(config.model)
+        if self._anthropic_http is None or family is None:
+            raise AnthropicChatError("Anthropic model is unavailable")
+        persona, turns, volatile, _prompt = split_prompt(system_prompt, messages)
+        body = chat_body(
+            model=family,
+            effort=MODEL_EFFORT[family],
+            persona=persona,
+            turns=turns,
+            volatile=volatile,
+            max_tokens=min(max(config.max_tokens, 1), CHAT_MAX_TOKENS),
+        )
+
+        def returned(model: str) -> None:
+            # Callers persist this config and show its model in the done frame.
+            config.model = model
+
+        async for piece in stream_text(
+            self._anthropic_http,
+            ANTHROPIC_MESSAGES_URL,
+            body,
+            self._anthropic_gate,
+            on_model=returned,
+        ):
+            yield piece
 
     async def _stream_grok(
         self, system_prompt: str, messages: list[dict[str, Any]]
@@ -118,46 +212,7 @@ class LLMCompletionsMixin(ABC):
         from .xai_chat import iter_text as xai_text
         from .xai_spend import api_key, chat_backend, redact
 
-        lines = []
-        turns: list[dict[str, str]] = []
-        notes: list[str] = []
-        for message in messages:
-            content = message.get("content", "")
-            if isinstance(content, list):
-                content = " ".join(
-                    part.get("text", "") if isinstance(part, dict) else str(part)
-                    for part in content
-                )
-            text_line = content if isinstance(content, str) else str(content)
-            role = message.get("role")
-            if role == "system" and text_line.strip():
-                notes.append(text_line.strip())
-            elif role in {"user", "assistant"} and text_line.strip():
-                turns.append({"role": role, "content": text_line.strip()})
-            lines.append(f"{role or 'user'}: {text_line}")
-        prompt = "\n".join(lines).strip() or "."
-        stable = getattr(system_prompt, "stable", "") or ""
-        full = str(system_prompt)
-        if isinstance(stable, str) and stable:
-            # The persona is sent on its own even if a later edit stopped it
-            # being a textual prefix of the whole prompt.
-            if full.startswith(stable):
-                persona, turn_state = stable, full[len(stable) :].lstrip("\n")
-            else:
-                persona, turn_state = stable, full
-        else:
-            persona, turn_state = full, ""
-        history_prefix = "\n".join(
-            f"{turn['role']}\n{turn['content']}" for turn in turns
-        )
-        logger.info(
-            "chat cache sha system=%s history=%s turns=%d",
-            hashlib.sha256(persona.encode()).hexdigest()[:16],
-            hashlib.sha256(history_prefix.encode()).hexdigest()[:16],
-            len(turns),
-        )
-        if notes:
-            turn_state = "\n\n".join([*notes, turn_state] if turn_state else notes)
+        persona, turns, turn_state, prompt = split_prompt(system_prompt, messages)
         if chat_backend() == "api" and api_key():
             yielded = False
             try:
@@ -281,11 +336,12 @@ class LLMCompletionsMixin(ABC):
         if family == CLAUDE_PRIMARY and not self._anthropic_ready():
             raise ValueError("Anthropic primary is backing off")
         system, turns = messages_payload(system_prompt, messages)
+        max_tokens = min(max(config.max_tokens, 1), CHAT_MAX_TOKENS)
         body = {
             "model": family,
             "system": system_blocks(system_prompt, system),
             "messages": turns,
-            "max_tokens": min(max(config.max_tokens, 1), CHAT_MAX_TOKENS),
+            "max_tokens": max_tokens,
             "thinking": {"type": "adaptive"},
             "output_config": {"effort": MODEL_EFFORT[family]},
         }
@@ -293,41 +349,81 @@ class LLMCompletionsMixin(ABC):
             body["tools"] = tool_definitions(tools)
             if not allow_tools:
                 body["tool_choice"] = {"type": "none"}
+        from .anthropic_chat import AnthropicCapError, backing_off, note_status
+        from .xai_spend import (
+            anthropic_estimate,
+            anthropic_usd,
+            try_reserve,
+            try_settle,
+        )
+
+        if backing_off():
+            raise ValueError("Anthropic is backing off")
+        prompt_chars = len(json.dumps(body["messages"])) + len(
+            json.dumps(body["system"])
+        )
+        allowed, hold = try_reserve(
+            "anthropic", anthropic_estimate(prompt_chars, max_tokens)
+        )
+        if not allowed:
+            raise AnthropicCapError("daily API cap reached")
         start = time.monotonic()
-        # Bound both queueing and HTTP lifetime. Cancellation propagates rather
-        # than starting a second inference after the websocket disconnects.
-        async with asyncio.timeout(min(config.read_timeout, 90.0)):
-            async with self._anthropic_gate:
-                async with http_stream(
-                    "anthropic",
-                    self._anthropic_http,
-                    "POST",
-                    ANTHROPIC_MESSAGES_URL,
-                    json=body,
-                ) as response:
-                    response.raise_for_status()
-                    raw = bytearray()
-                    async for chunk in response.aiter_bytes():
-                        raw.extend(chunk)
-                        if len(raw) > _ANTHROPIC_MAX_RESPONSE_BYTES:
-                            raise ValueError("Anthropic response exceeds size limit")
-        data = json_object(json.loads(raw))
-        message = completion_message(data, tools if allow_tools else None)
-        if not isinstance(data.get("model"), str) or not data["model"]:
-            raise ValueError("Missing response model")
+        usage: dict[str, Any] = {}
+        billable = True
+        try:
+            # Bound both queueing and HTTP lifetime. Cancellation propagates
+            # rather than starting a second inference after a disconnect.
+            async with asyncio.timeout(min(config.read_timeout, 90.0)):
+                async with self._anthropic_gate:
+                    async with http_stream(
+                        "anthropic",
+                        self._anthropic_http,
+                        "POST",
+                        ANTHROPIC_MESSAGES_URL,
+                        json=body,
+                    ) as response:
+                        if response.status_code != 200:
+                            billable = False
+                            note_status(
+                                response.status_code,
+                                response.headers.get("retry-after"),
+                            )
+                        response.raise_for_status()
+                        raw = bytearray()
+                        async for chunk in response.aiter_bytes():
+                            raw.extend(chunk)
+                            if len(raw) > _ANTHROPIC_MAX_RESPONSE_BYTES:
+                                raise ValueError(
+                                    "Anthropic response exceeds size limit"
+                                )
+            data = json_object(json.loads(raw))
+            found = data.get("usage")
+            usage = found if isinstance(found, dict) else {}
+            message = completion_message(data, tools if allow_tools else None)
+            if not isinstance(data.get("model"), str) or not data["model"]:
+                raise ValueError("Missing response model")
+        finally:
+            if usage:
+                usd = anthropic_usd(usage)
+            elif billable:
+                usd = anthropic_estimate(prompt_chars, max_tokens)
+            else:
+                usd = 0.0
+            daily = try_settle(hold, "anthropic", usd)
         config.model = data["model"]
-        usage = data.get("usage") or {}
         latency_ms = (time.monotonic() - start) * 1000
         try:
             logger.info(
                 "Claude chat: model=%s total_ms=%d input=%d cache_read=%d "
-                "cache_write=%d output=%d",
+                "cache_write=%d output=%d usd=%.6f daily_usd=%s",
                 config.model,
                 latency_ms,
                 int(usage.get("input_tokens", 0) or 0),
                 int(usage.get("cache_read_input_tokens", 0) or 0),
                 int(usage.get("cache_creation_input_tokens", 0) or 0),
                 int(usage.get("output_tokens", 0) or 0),
+                usd,
+                "-" if daily is None else f"{daily:.6f}",
             )
             from .observability import record_llm_usage
 

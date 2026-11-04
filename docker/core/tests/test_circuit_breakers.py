@@ -113,8 +113,16 @@ def test_for_dep_presets_match_spec() -> None:
 
 
 def test_unknown_dep_gets_the_default_config() -> None:
-    cfg = BreakerConfig.for_dep("anthropic")
-    assert cfg == BreakerConfig(name="anthropic")
+    cfg = BreakerConfig.for_dep("anthropic_extraction")
+    assert cfg == BreakerConfig(name="anthropic_extraction")
+
+
+def test_chat_providers_trip_at_chat_pace() -> None:
+    for name in ("anthropic", "xai_chat"):
+        cfg = BreakerConfig.for_dep(name)
+        assert cfg.error_threshold == 2
+        assert cfg.window_seconds == 300
+        assert cfg.probe_interval_seconds == 60
 
 
 def test_force_open_close() -> None:

@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from app import llm_router as lr
+from tests.anthropic_sse import respond
 from app.anthropic_messages import system_blocks
 from app.models import SessionState
 from app.personality.system_prompt import PromptText
@@ -48,7 +49,7 @@ async def capture(router, body=None):
 
     def handler(request):
         seen.append(json.loads(request.content))
-        return httpx.Response(200, json=body or reply())
+        return respond(request, body or reply())
 
     await router._anthropic_http.aclose()
     router._anthropic_http = httpx.AsyncClient(
@@ -95,13 +96,17 @@ async def test_a_chat_reply_sends_the_cached_persona(router):
         )
     ]
     assert pieces == [SECRET]
-    assert seen[0]["system"][0] == {
-        "type": "text",
-        "text": "PERSONA",
-        "cache_control": CACHED,
-    }
-    assert seen[0]["system"][1] == {"type": "text", "text": "TURN STATE"}
+    # Only the persona is in the system prompt; the turn state follows the
+    # history, so nothing that changes each turn sits ahead of it.
+    assert seen[0]["system"] == [
+        {"type": "text", "text": "PERSONA", "cache_control": CACHED}
+    ]
+    final = seen[0]["messages"][-1]
+    assert final["role"] == "user"
+    assert final["content"][0]["text"].endswith("TURN STATE")
+    assert final["content"][-1]["text"] == "hi"
     assert seen[0]["output_config"] == {"effort": "xhigh"}
+    assert seen[0]["stream"] is True
 
 
 async def test_the_tool_loop_sends_the_cached_persona(router):
