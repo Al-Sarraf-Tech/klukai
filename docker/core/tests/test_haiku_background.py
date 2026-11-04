@@ -435,16 +435,24 @@ async def test_stories_still_try_the_xai_api_first(routes, monkeypatch):
     routes.cli.assert_not_awaited()
 
 
-async def test_a_failed_story_call_falls_to_haiku_before_the_cli(routes, monkeypatch):
+async def test_a_failed_story_call_goes_to_the_cli_not_a_second_paid_provider(
+    routes, monkeypatch
+):
     from app.xai_chat import XaiChatError
 
     monkeypatch.setattr("app.xai_spend.api_key", lambda: "xai-key")
     monkeypatch.setattr(
         "app.xai_chat.complete_text", AsyncMock(side_effect=XaiChatError("down"))
     )
+    await bg.json_object("her_pov", "p", max_tokens=512)
+    routes.claude.assert_not_awaited()
+    routes.cli.assert_awaited_once()
+
+
+async def test_a_story_without_an_xai_key_still_uses_haiku(routes, monkeypatch):
+    monkeypatch.setattr("app.xai_spend.api_key", lambda: "")
     assert await bg.json_object("her_pov", "p", max_tokens=512) == {"mood": "serene"}
     routes.claude.assert_awaited_once()
-    routes.cli.assert_not_awaited()
 
 
 async def test_end_to_end_a_real_haiku_request_through_the_route(api):
@@ -454,3 +462,54 @@ async def test_end_to_end_a_real_haiku_request_through_the_route(api):
     assert report.provider == "anthropic"
     assert len(api.requests) == 1
     assert json.loads(api.requests[0].content)["output_config"] == {"effort": "low"}
+
+
+# ── the shared USD cap (owner, 2026-11-04: "Haiku can go up to $5") ──────────
+
+
+async def test_a_background_call_records_its_real_usd(api):
+    from app import xai_spend
+
+    await xl.complete_claude(SECRET_PROMPT, max_tokens=400, route="extraction")
+    assert xai_spend.spent_today() == pytest.approx(
+        xai_spend.anthropic_usd({"input_tokens": 900, "output_tokens": 300})
+    )
+
+
+async def test_a_spent_cap_sends_nothing_and_uses_no_attempt(api, monkeypatch):
+    monkeypatch.setenv("KLUKAI_API_DAILY_USD_CAP", "0")
+    with pytest.raises(xl.ExtractionUnavailable):
+        await xl.complete_claude(SECRET_PROMPT, max_tokens=400, route="extraction")
+    assert api.requests == []
+    api.reserve.assert_not_awaited()
+
+
+async def test_a_refused_background_call_releases_its_hold(api):
+    from app import xai_spend
+
+    api.reply = lambda request: httpx.Response(429, request=request)
+    with pytest.raises(ExtractionLLMError):
+        await xl.complete_claude(SECRET_PROMPT, max_tokens=400, route="extraction")
+    assert xai_spend.spent_today() == 0
+
+
+async def test_an_unusable_billed_reply_is_still_recorded(api):
+    from app import xai_spend
+
+    api.reply = lambda request: httpx.Response(
+        200, json=_message(stop_reason="max_tokens"), request=request
+    )
+    with pytest.raises(ExtractionLLMError):
+        await xl.complete_claude(SECRET_PROMPT, max_tokens=400, route="extraction")
+    assert xai_spend.spent_today() == pytest.approx(
+        xai_spend.anthropic_usd({"input_tokens": 900, "output_tokens": 300})
+    )
+
+
+async def test_no_attempt_left_releases_the_usd_hold(api):
+    from app import xai_spend
+
+    api.reserve.side_effect = CreativeBudgetError("none left")
+    with pytest.raises(xl.ExtractionUnavailable):
+        await xl.complete_claude(SECRET_PROMPT, max_tokens=400, route="extraction")
+    assert xai_spend.spent_today() == 0

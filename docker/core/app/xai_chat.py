@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 import contextvars
 import json
-import sqlite3
 import time
 from typing import Any
 
@@ -23,13 +22,14 @@ from .xai_spend import (
     CHAT_MODEL,
     CHAT_URL,
     api_key,
-    capped,
+    chat_estimate,
     chat_model,
     chat_usd,
     log_use,
-    record,
     redact,
     ticks_usd,
+    try_reserve,
+    try_settle,
 )
 
 # Story and summary JSON share the CLI's background budget. Reasoning tokens
@@ -39,6 +39,9 @@ STORY_COMPLETION_TOKENS = 8192
 STORY_BREAKER = "xai_story"
 
 _MAX_BODY = 2_000_000
+# The chat body sets no output limit; this is the reservation's ceiling.
+CHAT_RESERVE_TOKENS = 4096
+_REASONING_ALLOWANCE = 512
 # Set by the chat reply for the whole turn. The websocket stream() signature
 # stays the same, so existing callers and test doubles are unchanged.
 _conversation: contextvars.ContextVar[str] = contextvars.ContextVar(
@@ -149,17 +152,19 @@ def _settle(
     billed: float | None,
     started: float,
     first: float | None,
+    *,
+    hold: int | None = None,
+    fallback_usd: float = 0.0,
 ) -> None:
-    usd = 0.0
-    daily: float | None = None
+    """Settle the turn's hold with the real cost, or ``fallback_usd`` when the
+    reply was billed but its usage never arrived (a dropped stream)."""
     input_tokens = cached = output = reasoning = None
     if counts is not None:
         input_tokens, cached, output, reasoning = counts
         usd = chat_usd(input_tokens, cached, output) if billed is None else billed
-        try:
-            daily = record("chat", usd)
-        except (OSError, sqlite3.Error):
-            daily = None
+    else:
+        usd = billed if billed is not None else fallback_usd
+    daily = try_settle(hold, "chat", usd)
     log_use(
         "chat",
         model=model,
@@ -172,6 +177,12 @@ def _settle(
         usd=usd,
         daily_usd=daily,
     )
+
+
+def _partial_usd(prompt_chars: int, output_chars: int) -> float:
+    """Cost of a reply whose usage never arrived: the prompt, the text that
+    was streamed and a reasoning allowance."""
+    return chat_usd(prompt_chars // 3 + 1, 0, output_chars // 3 + _REASONING_ALLOWANCE)
 
 
 def conversation_messages(
@@ -222,8 +233,6 @@ async def iter_text(
     key = api_key()
     if not key:
         raise XaiChatError("xai chat is not configured")
-    if capped():
-        raise XaiCapError("xai daily cap reached")
     history = turns if turns is not None else [{"role": "user", "content": prompt}]
     messages = conversation_messages(system, history, volatile)
     model = chat_model()
@@ -234,6 +243,12 @@ async def iter_text(
         "stream_options": {"include_usage": True},
         "reasoning_effort": "low",
     }
+    prompt_chars = len(json.dumps(messages))
+    allowed, hold = try_reserve(
+        "chat", chat_estimate(prompt_chars, CHAT_RESERVE_TOKENS)
+    )
+    if not allowed:
+        raise XaiCapError("xai daily cap reached")
     started = time.monotonic()
     first: float | None = None
     counts: tuple[int, int, int, int] | None = None
@@ -251,6 +266,10 @@ async def iter_text(
         headers["x-grok-conv-id"] = conv
     yielded = False
     auth_failed = False
+    # None: no reply yet (nothing billed unless the request already left).
+    status: int | None = None
+    sent = False
+    output_chars = 0
     transport = httpx.AsyncHTTPTransport(retries=0, trust_env=False)
     try:
         async with httpx.AsyncClient(
@@ -260,6 +279,7 @@ async def iter_text(
             timeout=httpx.Timeout(timeout, connect=5.0),
         ) as client:
             async with get_breaker("xai_chat").protect():
+                sent = True
                 async with client.stream(
                     "POST",
                     CHAT_URL,
@@ -296,20 +316,35 @@ async def iter_text(
                             if first is None:
                                 first = time.monotonic()
                             yielded = True
+                            output_chars += len(piece)
                             yield piece
         if auth_failed:
             raise XaiAuthError("xai chat was not authorized")
+        if not yielded:
+            raise XaiChatError("xai chat returned no text")
     except XaiChatError:
         raise
     except CircuitOpen as exc:
+        sent = False
         raise XaiChatError("xai chat is unavailable") from exc
     except (OSError, httpx.HTTPError, TimeoutError) as exc:
         raise XaiChatError(
             redact(f"xai chat is unavailable: {type(exc).__name__}")
         ) from exc
-    if not yielded:
-        raise XaiChatError("xai chat returned no text")
-    _settle(model, counts, billed, started, first)
+    finally:
+        # Runs on a clean end, an error, and a client that went away
+        # mid-reply (the generator is closed): a billed reply is always
+        # recorded, from its usage when it arrived, else estimated.
+        billable = status == 200 or (status is None and sent)
+        _settle(
+            model,
+            counts,
+            billed,
+            started,
+            first,
+            hold=hold,
+            fallback_usd=_partial_usd(prompt_chars, output_chars) if billable else 0.0,
+        )
 
 
 async def complete_text(
@@ -328,24 +363,30 @@ async def complete_text(
     key = api_key()
     if not key:
         raise XaiChatError("xai chat is not configured")
-    if capped():
-        raise XaiCapError("xai daily cap reached")
     if type(max_tokens) is not int or not 1 <= max_tokens <= 8192:
         raise XaiChatError("xai chat token budget is invalid")
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": prompt},
+    ]
     body = {
         "model": CHAT_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
+        "messages": messages,
         "stream": False,
         "reasoning_effort": "low",
         "max_completion_tokens": max_tokens,
     }
+    prompt_chars = len(json.dumps(messages))
+    allowed, hold = try_reserve("chat", chat_estimate(prompt_chars, max_tokens))
+    if not allowed:
+        raise XaiCapError("xai daily cap reached")
     started = time.monotonic()
     headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
     transport = httpx.AsyncHTTPTransport(retries=0, trust_env=False)
     payload: dict[str, Any] | None = None
+    status: int | None = None
+    sent = False
+    settled = False
     try:
         async with httpx.AsyncClient(
             transport=transport,
@@ -354,7 +395,9 @@ async def complete_text(
             timeout=httpx.Timeout(timeout, connect=5.0),
         ) as client:
             async with get_breaker(STORY_BREAKER).protect():
+                sent = True
                 response = await client.post(CHAT_URL, json=body, headers=headers)
+                status = response.status_code
                 if response.status_code in {401, 403}:
                     pass
                 elif response.status_code != 200:
@@ -370,26 +413,45 @@ async def complete_text(
                     if not isinstance(parsed, dict) or parsed.get("error"):
                         raise XaiChatError("xai chat returned malformed JSON")
                     payload = parsed
+        if payload is None:
+            raise XaiAuthError("xai chat was not authorized")
+        counts = usage_counts(payload)
+        billed: float | None = None
+        usage = payload.get("usage")
+        if isinstance(usage, dict):
+            exact = ticks_usd(usage.get("cost_in_usd_ticks"))
+            if exact is not None:
+                billed = exact
+        text = message_text(payload)
+        settled = True
+        _settle(
+            CHAT_MODEL,
+            counts,
+            billed,
+            started,
+            None,
+            hold=hold,
+            fallback_usd=_partial_usd(prompt_chars, max_tokens * 3),
+        )
+        if not text:
+            raise XaiChatError("xai chat returned no text")
+        return text
     except XaiChatError:
         raise
     except CircuitOpen as exc:
+        sent = False
         raise XaiChatError("xai chat is unavailable") from exc
     except (OSError, httpx.HTTPError, TimeoutError) as exc:
         raise XaiChatError(
             redact(f"xai chat is unavailable: {type(exc).__name__}")
         ) from exc
-    if payload is None:
-        raise XaiAuthError("xai chat was not authorized")
-    counts = usage_counts(payload)
-    billed: float | None = None
-    usage = payload.get("usage")
-    if isinstance(usage, dict):
-        exact = ticks_usd(usage.get("cost_in_usd_ticks"))
-        if exact is not None:
-            billed = exact
-    text = message_text(payload)
-    if not text:
-        _settle(CHAT_MODEL, counts, billed, started, None)
-        raise XaiChatError("xai chat returned no text")
-    _settle(CHAT_MODEL, counts, billed, started, None)
-    return text
+    finally:
+        if not settled:
+            # A timeout after the request left may still be billed by xAI:
+            # keep the full reservation. A refused or failed status is not.
+            billable = status == 200 or (status is None and sent)
+            try_settle(
+                hold,
+                "chat",
+                chat_estimate(prompt_chars, max_tokens) if billable else 0.0,
+            )

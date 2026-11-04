@@ -266,8 +266,9 @@ async def test_auth_failure_does_not_open_the_breaker(isolated, monkeypatch):
 
 
 async def test_server_errors_open_the_breaker(isolated, monkeypatch):
-    calls = _install(monkeypatch, [httpx.Response(502) for _ in range(5)])
-    for _ in range(5):
+    # Chat pace: two bad turns in five minutes send chat to the CLI at once.
+    calls = _install(monkeypatch, [httpx.Response(502) for _ in range(2)])
+    for _ in range(2):
         with pytest.raises(XaiChatError, match="failed"):
             async for _piece in iter_text("persona", "hello"):
                 pass
@@ -275,7 +276,7 @@ async def test_server_errors_open_the_breaker(isolated, monkeypatch):
     with pytest.raises(XaiChatError, match="unavailable"):
         async for _piece in iter_text("persona", "hello"):
             pass
-    assert len(calls) == 5
+    assert len(calls) == 2
 
 
 async def test_the_daily_cap_skips_the_network(isolated, monkeypatch):
@@ -464,7 +465,8 @@ async def test_text_without_usage_still_logs_and_a_ledger_miss_does_not_drop_it(
 
         raise sqlite3.OperationalError("locked")
 
-    monkeypatch.setattr("app.xai_chat.record", locked)
+    monkeypatch.setattr("app.xai_spend.reserve", locked)
+    monkeypatch.setattr("app.xai_spend.record", locked)
     caplog.clear()
     _install(monkeypatch, [_ok()])
     assert [piece async for piece in iter_text("persona", "hello")] == ["Hi", " there"]
@@ -662,7 +664,8 @@ async def test_a_story_without_usage_still_returns_and_a_ledger_miss_is_kept(
 
         raise sqlite3.OperationalError("locked")
 
-    monkeypatch.setattr("app.xai_chat.record", locked)
+    monkeypatch.setattr("app.xai_spend.reserve", locked)
+    monkeypatch.setattr("app.xai_spend.record", locked)
     caplog.clear()
     _install(monkeypatch, [_story("Hi", {"prompt_tokens": 3, "completion_tokens": 1})])
     assert await complete_text("s", "p") == "Hi"
@@ -675,3 +678,77 @@ def test_message_text_ignores_unusable_shapes():
     assert message_text({"choices": [{"message": "no"}]}) == ""
     assert message_text({"choices": [{"message": {"content": 5}}]}) == ""
     assert message_text({"choices": [{"message": {"content": "  hi  "}}]}) == "hi"
+
+
+# ── spend holes (review 2026-11-04, H5) ───────────────────────────────────────
+
+
+async def test_a_reader_that_leaves_mid_reply_still_records_the_spend(monkeypatch):
+    from app import xai_spend
+
+    _install(monkeypatch, [_ok()])
+    stream = iter_text("persona", "hello")
+    assert await anext(stream) == "Hi"
+    await stream.aclose()
+    assert xai_spend.spent_today() > 0
+
+
+async def test_a_mid_stream_error_still_records_the_spend(monkeypatch):
+    from app import xai_spend
+
+    body = "data: " + json.dumps({"choices": [{"delta": {"content": "Hi"}}]}) + "\ndata: {bad\n"
+    _install(monkeypatch, [httpx.Response(200, text=body)])
+    got = []
+    with pytest.raises(XaiChatError):
+        async for piece in iter_text("persona", "hello"):
+            got.append(piece)
+    assert got == ["Hi"]
+    assert xai_spend.spent_today() > 0
+
+
+async def test_a_refused_chat_releases_its_hold(monkeypatch):
+    from app import xai_spend
+
+    _install(monkeypatch, [httpx.Response(429)])
+    with pytest.raises(XaiChatError):
+        async for _piece in iter_text("persona", "hello"):
+            pass
+    assert xai_spend.spent_today() == 0
+
+
+async def test_a_clean_reply_settles_to_its_real_price(monkeypatch):
+    from app import xai_spend
+
+    _install(monkeypatch, [_ok()])
+    assert [p async for p in iter_text("persona", "hello")] == ["Hi", " there"]
+    assert xai_spend.spent_today() == pytest.approx(xai_spend.chat_usd(100, 80, 10))
+
+
+async def test_a_billed_story_that_does_not_parse_is_still_recorded(monkeypatch):
+    from app import xai_spend
+
+    _install(monkeypatch, [httpx.Response(200, text="{not json")])
+    with pytest.raises(XaiChatError, match="malformed"):
+        await complete_text("s", "p", max_tokens=100)
+    assert xai_spend.spent_today() > 0
+
+
+async def test_a_story_timeout_keeps_its_hold_and_a_refusal_does_not(monkeypatch):
+    from app import xai_spend
+
+    def slow(request):
+        raise httpx.ReadTimeout("slow", request=request)
+
+    monkeypatch.setattr(
+        httpx, "AsyncHTTPTransport", lambda **_kwargs: httpx.MockTransport(slow)
+    )
+    with pytest.raises(XaiChatError, match="unavailable"):
+        await complete_text("s", "p", max_tokens=100)
+    held = xai_spend.spent_today()
+    assert held == pytest.approx(xai_spend.chat_estimate(len(json.dumps(
+        [{"role": "system", "content": "s"}, {"role": "user", "content": "p"}]
+    )), 100))
+    _install(monkeypatch, [httpx.Response(503)])
+    with pytest.raises(XaiChatError):
+        await complete_text("s", "p", max_tokens=100)
+    assert xai_spend.spent_today() == pytest.approx(held)

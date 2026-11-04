@@ -221,7 +221,6 @@ def _ok_response(portrait: bytes):
     [
         urllib.error.HTTPError("u", 500, "no", hdrs=None, fp=io.BytesIO(b"x")),
         urllib.error.HTTPError("u", 429, "no", hdrs=None, fp=io.BytesIO(b"x")),
-        TimeoutError("slow"),
     ],
 )
 def test_a_passing_api_failure_gets_one_more_try_before_the_cli(
@@ -245,6 +244,68 @@ def test_a_passing_api_failure_gets_one_more_try_before_the_cli(
 
     assert xai_image.render_with_fallback(_request(), {"klukai": {}}, no_cli)
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    "failure", [TimeoutError("slow"), urllib.error.URLError("reset")]
+)
+def test_a_timed_out_edit_is_charged_once_and_never_resent(home, monkeypatch, failure):
+    """xAI may have finished it server-side: one charge, no second paid edit."""
+    calls = []
+
+    def urlopen(req, timeout=0):
+        calls.append(req)
+        raise failure
+
+    monkeypatch.setattr(xai_image.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(xai_image, "_portrait", lambda: _png())
+    monkeypatch.setattr(xai_image.time, "sleep", lambda _s: None)
+    drawn = []
+    assert xai_image.render_with_fallback(
+        _request(), {"klukai": {}}, lambda *_a: drawn.append(1) or b"cli"
+    ) == b"cli"
+    assert len(calls) == 1 and drawn == [1]
+    spend = xai_image._spend()
+    assert spend.spent_today() == pytest.approx(spend.image_usd())
+
+
+def test_a_billed_edit_without_a_usable_picture_is_still_recorded(home, monkeypatch):
+    body = json.dumps(
+        {"data": [{"b64_json": "!!not base64!!"}], "usage": {"cost_in_usd_ticks": 700_000_000}}
+    ).encode()
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    calls = []
+
+    def urlopen(req, timeout=0):
+        calls.append(req)
+        return Response(body)
+
+    monkeypatch.setattr(xai_image.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(xai_image, "_portrait", lambda: _png())
+    assert xai_image.render_with_fallback(
+        _request(), {"klukai": {}}, lambda *_a: b"cli"
+    ) == b"cli"
+    assert len(calls) == 1
+    assert xai_image._spend().spent_today() == pytest.approx(0.07)
+
+
+def test_a_refused_edit_releases_its_hold(home, monkeypatch):
+    def urlopen(req, timeout=0):
+        raise urllib.error.HTTPError("u", 400, "no", hdrs=None, fp=io.BytesIO(b"x"))
+
+    monkeypatch.setattr(xai_image.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(xai_image, "_portrait", lambda: _png())
+    assert xai_image.render_with_fallback(
+        _request(), {"klukai": {}}, lambda *_a: b"cli"
+    ) == b"cli"
+    assert xai_image._spend().spent_today() == 0
 
 
 def test_a_bad_request_is_not_tried_twice(home, monkeypatch):

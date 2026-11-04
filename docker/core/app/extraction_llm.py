@@ -6,6 +6,10 @@ Haiku 5.5 at low effort. app/background_llm.py falls back to the Grok CLI (Grok
 4.7 at low effort, owner decision 2026-10-31) when Haiku fails. Without both
 settings, background text is the CLI alone and nothing is billed here.
 
+A Haiku request also holds its cost in the shared USD ledger
+(``KLUKAI_API_DAILY_USD_CAP``, the same cap as xAI chat and pictures) and
+settles its real usage after the reply; a spent cap uses the CLI instead.
+
 Either request needs a positive ``KLUKAI_EXTRACTION_DAILY_LIMIT``. Each one
 first reserves one attempt in the persistent creative ledger (kind
 ``extraction``: one UTC-day cap shared by every background call), and a reserved
@@ -265,13 +269,23 @@ async def complete_claude(
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": CLAUDE_EFFORT},
     }
+    from .xai_spend import anthropic_estimate, anthropic_usd, try_reserve, try_settle
+
+    ceiling = anthropic_estimate(len(prompt) + len(str(body["system"])), max_tokens)
+    allowed, hold = try_reserve("anthropic", ceiling)
+    if not allowed:
+        _log_cap_once()
+        raise ExtractionUnavailable("Daily API cap reached")
     try:
         attempt_id = await reserve_attempt("extraction")
     except CreativeBudgetError:
+        try_settle(hold, "anthropic", 0.0)
         _log_cap_once()
         raise ExtractionUnavailable("Haiku allowance unavailable") from None
     started = time.monotonic()
     budget = _time_budget(role, timeout)
+    # Until a reply says otherwise, a sent request may be billed.
+    charge = ceiling
     try:
         async with _claude_gate:
             async with asyncio.timeout(budget):
@@ -284,16 +298,24 @@ async def complete_claude(
                     headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
                     timeout=httpx.Timeout(budget, connect=5.0),
                 ) as result:
+                    if result.status_code != 200:
+                        charge = 0.0
                     result.raise_for_status()
                     raw = bytearray()
                     async for chunk in result.aiter_bytes():
                         raw.extend(chunk)
                         if len(raw) > _MAX_RESPONSE_BYTES:
                             raise ExtractionLLMError("Haiku reply exceeds size limit")
-        text, used_model, usage = _visible_text(json.loads(raw))
+        data = json.loads(raw)
+        found = data.get("usage") if isinstance(data, dict) else None
+        if isinstance(found, dict):
+            charge = anthropic_usd(found)
+        text, used_model, usage = _visible_text(data)
     except ExtractionLLMError:
+        try_settle(hold, "anthropic", charge)
         raise
     except (httpx.HTTPError, TimeoutError, ValueError, TypeError, KeyError) as error:
+        try_settle(hold, "anthropic", charge)
         status = (
             error.response.status_code
             if isinstance(error, httpx.HTTPStatusError)
@@ -304,6 +326,13 @@ async def complete_claude(
             f"Haiku request failed ({type(error).__name__}, HTTP {status})"
         ) from None
 
+    daily = try_settle(hold, "anthropic", charge)
+    logger.info(
+        "Haiku background: route=%s usd=%.6f daily_usd=%s",
+        route,
+        charge,
+        "-" if daily is None else f"{daily:.6f}",
+    )
     await record_usage(attempt_id, usage)
     try:
         from .observability import record_llm_usage

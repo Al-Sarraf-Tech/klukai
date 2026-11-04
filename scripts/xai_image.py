@@ -14,7 +14,6 @@ import importlib.util
 import json
 import logging
 from pathlib import Path
-import sqlite3
 import time
 import urllib.error
 import urllib.request
@@ -48,34 +47,56 @@ def _spend():
     return module
 
 
+class _Billed(agy.RuntimeError):
+    """xAI took the request and may have charged it, but no picture came back."""
+
+    def __init__(self, message: str, usd: float) -> None:
+        super().__init__(message)
+        self.usd = usd
+
+
 def render_with_fallback(request: dict, references: dict, fallback):
-    """API edit when selected and under the cap; otherwise the CLI renderer."""
+    """API edit when selected and under the cap; otherwise the CLI renderer.
+
+    The edit's price is held in the shared ledger before the request. A
+    rejected or unsent request releases it. A billed edit is recorded even
+    when its picture is unusable, and is never sent a second time: only a 429
+    or 5xx (refused, so not billed) gets one more try. The CLI fallback is
+    the account login, never the paid API.
+    """
     _refuse_unsupported(request)
     spend = _spend()
-    if spend.image_backend() != "api" or not spend.api_key() or spend.capped():
+    if spend.image_backend() != "api" or not spend.api_key():
         return fallback(request, references)
     try:
         reference = _portrait()
     except OSError as exc:
         logger.warning("xai image portrait unavailable: %s", type(exc).__name__)
         return fallback(request, references)
+    allowed, hold = spend.try_reserve("image", spend.image_usd())
+    if not allowed:
+        return fallback(request, references)
     started = time.monotonic()
+    charge = 0.0
     try:
         try:
-            image, usd = _edit(request, reference, spend)
+            image, charge = _edit(request, reference, spend)
         except _PassingFailure:
             if time.monotonic() - started > _RETRY_WITHIN_S:
                 raise
             logger.warning("xai image failed in passing; trying once more")
             time.sleep(_RETRY_PAUSE_S)
-            image, usd = _edit(request, reference, spend)
+            image, charge = _edit(request, reference, spend)
     except Exception as exc:
+        if isinstance(exc, _Billed):
+            charge = exc.usd
+        _charge(spend, charge, "image", spend.IMAGE_MODEL, hold)
         logger.warning(
             "xai image falling back to the CLI: %s",
             spend.redact(f"{type(exc).__name__}: {exc}"),
         )
         return fallback(request, references)
-    _charge(spend, usd, "image", spend.IMAGE_MODEL)
+    _charge(spend, charge, "image", spend.IMAGE_MODEL, hold)
     return image
 
 
@@ -86,11 +107,8 @@ def _portrait() -> bytes:
     return data
 
 
-def _charge(spend, usd: float, kind: str, model: str) -> None:
-    try:
-        daily = spend.record("image", usd)
-    except (OSError, ValueError, sqlite3.Error):
-        daily = None
+def _charge(spend, usd: float, kind: str, model: str, hold=None) -> None:
+    daily = spend.try_settle(hold, "image", usd)
     spend.log_use(kind, model=model, usd=usd, daily_usd=daily)
 
 
@@ -127,42 +145,57 @@ def _edit(request: dict, reference: bytes, spend) -> tuple[bytes, float]:
         failure = _PassingFailure if exc.code == 429 or exc.code >= 500 else agy.ProviderUnavailable
         raise failure(f"xai image failed: HTTP {exc.code}") from None
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise _PassingFailure(
-            spend.redact(f"xai image is unavailable: {type(exc).__name__}")
+        # The edit may have finished server-side: count it, never resend it.
+        raise _Billed(
+            spend.redact(f"xai image is unavailable: {type(exc).__name__}"),
+            spend.image_usd(),
         ) from None
     if len(body) > _MAX_RESPONSE:
-        raise agy.RuntimeError("xai image response is too large")
+        raise _Billed("xai image response is too large", spend.image_usd())
+    usd = spend.image_usd()
     try:
         data = json.loads(body)
+        usage = data.get("usage") if isinstance(data, dict) else None
+        exact = spend.ticks_usd(usage.get("cost_in_usd_ticks")) if isinstance(usage, dict) else None
+        if exact is not None:
+            usd = exact
         encoded = data["data"][0]["b64_json"]
         if not isinstance(encoded, str) or not encoded:
             raise ValueError("image")
         decoded = base64.b64decode(encoded, validate=True)
-    except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-        raise agy.RuntimeError("xai image response had no image") from exc
-    usage = data.get("usage") if isinstance(data, dict) else None
-    exact = spend.ticks_usd(usage.get("cost_in_usd_ticks")) if isinstance(usage, dict) else None
-    return normalize(decoded), exact if exact is not None else spend.image_usd()
+        return normalize(decoded), usd
+    except Exception as exc:
+        raise _Billed("xai image response had no usable image", usd) from exc
 
 
 def check_with_fallback(candidate: bytes, value: dict, references: dict, *, timeout: float, cli):
-    """grok-4.7 vision at low effort. The CLI checker runs if this call fails."""
+    """grok-4.7 vision at low effort. The CLI checker runs if this call fails.
+
+    The check's price is held before the request; a billed check that comes
+    back unusable is still recorded.
+    """
     spend = _spend()
-    if spend.image_backend() != "api" or not spend.api_key() or spend.capped() or timeout < 5:
+    if spend.image_backend() != "api" or not spend.api_key() or timeout < 5:
         return cli(candidate, value, references, timeout=timeout)
+    allowed, hold = spend.try_reserve("image", spend.CHECK_USD)
+    if not allowed:
+        return cli(candidate, value, references, timeout=timeout)
+    billed = {"usd": 0.0}
     try:
-        verdict, usd = _check(candidate, value, spend, timeout)
+        verdict, usd = _check(candidate, value, spend, timeout, billed)
     except Exception as exc:
+        _charge(spend, billed["usd"], "check", spend.CHAT_MODEL, hold)
         logger.warning(
             "xai checker falling back to the CLI: %s",
             spend.redact(f"{type(exc).__name__}: {exc}"),
         )
         return cli(candidate, value, references, timeout=timeout)
-    _charge(spend, usd, "check", spend.CHAT_MODEL)
+    _charge(spend, usd, "check", spend.CHAT_MODEL, hold)
     return verdict
 
 
-def _check(candidate: bytes, value: dict, spend, timeout: float) -> tuple[dict, float]:
+def _check(candidate: bytes, value: dict, spend, timeout: float, billed=None) -> tuple[dict, float]:
+    billed = {} if billed is None else billed
     from claude_image_check import RUBRIC, expected_people, validate_verdict
 
     portrait = _portrait()
@@ -199,9 +232,22 @@ def _check(candidate: bytes, value: dict, spend, timeout: float) -> tuple[dict, 
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
-        body = response.read(2_000_000)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            # From here xAI has answered 200 and billed the check.
+            billed["usd"] = spend.CHECK_USD
+            body = response.read(2_000_000)
+    except urllib.error.HTTPError:
+        raise
+    except (urllib.error.URLError, TimeoutError, OSError):
+        # Possibly finished server-side.
+        billed["usd"] = spend.CHECK_USD
+        raise
     data = json.loads(body)
+    usage = data.get("usage") if isinstance(data, dict) else None
+    exact = spend.ticks_usd(usage.get("cost_in_usd_ticks")) if isinstance(usage, dict) else None
+    if exact is not None:
+        billed["usd"] = exact
     text = data["choices"][0]["message"]["content"]
     start = text.find("{")
     end = text.rfind("}")
@@ -209,8 +255,6 @@ def _check(candidate: bytes, value: dict, spend, timeout: float) -> tuple[dict, 
         raise ValueError("verdict")
     verdict = validate_verdict(json.loads(text[start : end + 1]))
     verdict["seconds"] = 0.0
-    usage = data.get("usage") if isinstance(data, dict) else None
-    exact = spend.ticks_usd(usage.get("cost_in_usd_ticks")) if isinstance(usage, dict) else None
     return verdict, exact if exact is not None else spend.CHECK_USD
 
 

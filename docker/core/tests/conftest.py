@@ -230,6 +230,18 @@ def _reset_return_greetings():
 
 
 @pytest.fixture(autouse=True)
+def isolate_spend_ledger(tmp_path, monkeypatch):
+    """Paid-call tests never touch a real ledger, and start un-backed-off."""
+    if not os.environ.get("KLUKAI_XAI_LEDGER", "").startswith(str(tmp_path)):
+        monkeypatch.setenv("KLUKAI_XAI_LEDGER", str(tmp_path / "ledger" / "spend.sqlite3"))
+    from app import anthropic_chat
+
+    anthropic_chat.reset_backoff()
+    yield
+    anthropic_chat.reset_backoff()
+
+
+@pytest.fixture(autouse=True)
 def isolate_dependency_breakers():
     """Unit tests inject independent outages; production keeps one registry.
 

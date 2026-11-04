@@ -1,8 +1,11 @@
-"""Shared xAI spend math and the daily USD ledger.
+"""Shared API spend math and the daily USD ledger.
 
-Chat (core) and pictures (the host image worker) both write this file, so a
-cap is one number. The API key is never read from disk here and never written
-into the ledger or a log line.
+Chat (core), background text (core) and pictures (the host image worker) all
+write this file, so the cap is one number across xAI and Anthropic. A paid call
+reserves its estimated cost before the request and settles the real cost
+afterwards, so concurrent calls cannot all pass the cap check at once. An API
+key is never read from disk here and never written into the ledger or a log
+line.
 """
 
 from __future__ import annotations
@@ -46,7 +49,7 @@ IMAGE_USD = 0.09
 CHECK_USD = 0.007
 
 _KEY = re.compile(r"xai-[A-Za-z0-9]{8,}")
-_KINDS = frozenset({"chat", "image"})
+_KINDS = frozenset({"chat", "image", "anthropic"})
 
 
 def api_key() -> str:
@@ -122,6 +125,68 @@ def chat_usd(input_tokens: int, cached_tokens: int, output_tokens: int) -> float
     fresh = fresh_in - cached
     output = max(0, output_tokens)
     return (fresh * per_input + cached * per_cached + output * per_output) / 1_000_000
+
+
+def anthropic_rates() -> tuple[float, float, float, float, float]:
+    """USD per million: input, 5-minute cache write, 1-hour cache write, cache read, output.
+
+    Defaults are Claude Haiku 5.5 list prices for prompts up to 100K tokens
+    (platform.claude.com pricing, 2026-10-07 rate card).
+    """
+    return (
+        _positive("KLUKAI_ANTHROPIC_USD_PER_M_INPUT", 0.10),
+        _positive("KLUKAI_ANTHROPIC_USD_PER_M_CACHE_WRITE_5M", 0.125),
+        _positive("KLUKAI_ANTHROPIC_USD_PER_M_CACHE_WRITE_1H", 0.20),
+        _positive("KLUKAI_ANTHROPIC_USD_PER_M_CACHE_READ", 0.01),
+        _positive("KLUKAI_ANTHROPIC_USD_PER_M_OUTPUT", 0.50),
+    )
+
+
+def _count(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
+
+
+def anthropic_usd(usage: object) -> float:
+    """Price one Messages API ``usage`` object. Thinking is inside output.
+
+    A cache write without a TTL breakdown is priced at the 1-hour rate, the
+    dearer of the two, so the ledger never under-counts.
+    """
+    if not isinstance(usage, dict):
+        return 0.0
+    per_input, per_5m, per_1h, per_read, per_output = anthropic_rates()
+    written = _count(usage.get("cache_creation_input_tokens"))
+    detail = usage.get("cache_creation")
+    five = hour = 0
+    if isinstance(detail, dict):
+        five = _count(detail.get("ephemeral_5m_input_tokens"))
+        hour = _count(detail.get("ephemeral_1h_input_tokens"))
+    rest = max(0, written - five - hour)
+    total = (
+        _count(usage.get("input_tokens")) * per_input
+        + five * per_5m
+        + (hour + rest) * per_1h
+        + _count(usage.get("cache_read_input_tokens")) * per_read
+        + _count(usage.get("output_tokens")) * per_output
+    )
+    return total / 1_000_000
+
+
+def anthropic_estimate(prompt_chars: int, max_tokens: int) -> float:
+    """A ceiling for one request before it is sent: every prompt token at the
+    cache-write rate and every allowed output token."""
+    _per_input, _per_5m, per_1h, _per_read, per_output = anthropic_rates()
+    tokens_in = max(0, prompt_chars) // 3 + 1
+    return (tokens_in * per_1h + max(0, max_tokens) * per_output) / 1_000_000
+
+
+def chat_estimate(prompt_chars: int, max_tokens: int) -> float:
+    """A ceiling for one xAI chat request: no cache hit and the full output."""
+    per_input, _per_cached, per_output, _per_image = rates()
+    tokens_in = max(0, prompt_chars) // 3 + 1
+    return (tokens_in * per_input + max(0, max_tokens) * per_output) / 1_000_000
 
 
 def image_usd() -> float:
@@ -212,6 +277,72 @@ def record(kind: str, usd: float, now: datetime | None = None) -> float:
 
 def capped(now: datetime | None = None) -> bool:
     return spent_today(now) >= daily_cap()
+
+
+def reserve(kind: str, usd: float, now: datetime | None = None) -> int | None:
+    """Hold ``usd`` against today's cap before a paid call; None when capped.
+
+    The check and the hold are one locked transaction, so two concurrent calls
+    cannot both pass the cap. ``settle`` replaces the hold with the real cost.
+    A hold that is never settled (a crash mid-call) stays counted, which errs
+    on the side of the cap.
+    """
+    if kind not in _KINDS or usd < 0:
+        raise ValueError("invalid api spend")
+    path = ledger_path()
+    day = _day(now)
+    with _lock(path), closing(_db(path)) as db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute(
+            "SELECT COALESCE(SUM(usd), 0) FROM xai_spend WHERE day = ?", (day,)
+        ).fetchone()
+        if float(row[0] if row else 0.0) >= daily_cap():
+            db.execute("ROLLBACK")
+            return None
+        cursor = db.execute(
+            "INSERT INTO xai_spend VALUES (?, ?, ?, ?)",
+            (day, kind, usd, datetime.now(UTC).isoformat()),
+        )
+        hold = cursor.lastrowid
+        db.execute("COMMIT")
+    return int(hold) if hold is not None else None
+
+
+def try_reserve(kind: str, usd: float) -> tuple[bool, int | None]:
+    """(allowed, hold). A ledger that cannot be written does not block a call,
+    the same as ``record`` failing after one; only a spent cap does."""
+    try:
+        hold = reserve(kind, usd)
+    except (OSError, sqlite3.Error):
+        return True, None
+    return hold is not None, hold
+
+
+def try_settle(hold: int | None, kind: str, usd: float) -> float | None:
+    """Settle a hold, or record the charge when there was none. Never raises."""
+    try:
+        if hold is None:
+            return record(kind, usd) if usd > 0 else None
+        return settle(hold, usd)
+    except (OSError, ValueError, sqlite3.Error):
+        return None
+
+
+def settle(hold: int, usd: float) -> float:
+    """Replace a reservation with the real charge; return that day's total."""
+    if usd < 0:
+        raise ValueError("invalid api spend")
+    path = ledger_path()
+    with _lock(path), closing(_db(path)) as db:
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("UPDATE xai_spend SET usd = ? WHERE rowid = ?", (usd, hold))
+        row = db.execute(
+            "SELECT COALESCE(SUM(usd), 0) FROM xai_spend "
+            "WHERE day = (SELECT day FROM xai_spend WHERE rowid = ?)",
+            (hold,),
+        ).fetchone()
+        db.execute("COMMIT")
+    return float(row[0] if row else usd)
 
 
 def log_use(
