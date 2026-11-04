@@ -4,9 +4,11 @@
 Chat and background text default to low effort. The caller passes the effort.
 No xAI API key and no paid credits. The clean Grok home keeps
 ``disable_api_key_auth = true``. Pinned CLI 1.0.62 has no
-``--system-prompt-file``. The persona is ``--system-prompt-override`` only.
-The user turn is ``--prompt-json``. Each of those argv strings stays under
-120KB. One Grok home is reused per role so a later call is not a cold boot.
+``--system-prompt-file``. The persona is ``--system-prompt-override`` only,
+and stays under 120KB. The conversation goes to the CLI on stdin
+(``--prompt-file /dev/stdin``), never on argv, so other local processes
+cannot read it from ``ps`` or /proc. One Grok home is reused per role so a
+later call is not a cold boot.
 """
 from __future__ import annotations
 
@@ -29,9 +31,12 @@ CHAT_EFFORT = "low"
 BACKGROUND_EFFORT = "low"
 _EFFORTS = {"minimal", "low", "medium", "high", "xhigh"}
 MAX_ARG_STRLEN = 131072
-# --prompt-json is one argv. Stay under Linux MAX_ARG_STRLEN and fail in
+# The persona is one argv. Stay under Linux MAX_ARG_STRLEN and fail in
 # process instead of letting the kernel return E2BIG.
 PROMPT_JSON_LIMIT = 120_000
+# The conversation goes over stdin; this only bounds a runaway prompt.
+PROMPT_STDIN_LIMIT = 1_000_000
+PROMPT_STDIN = "/dev/stdin"
 
 
 def _configured_effort(name: str, default: str) -> str:
@@ -82,20 +87,26 @@ _CHAT_DENIED = (
 
 
 def prompt_document(prompt: str) -> str:
-    """The user turn only. The persona is --system-prompt-override, once."""
+    """The user turn as ACP JSON (kept for callers that still need it)."""
     return json.dumps(
         {"type": "acp", "content": [{"type": "text", "text": prompt}]},
         separators=(",", ":"),
     )
 
 
+def prompt_input(prompt: str) -> bytes:
+    """The user turn exactly as the CLI reads it from stdin."""
+    data = prompt.encode()
+    if len(data) >= PROMPT_STDIN_LIMIT:
+        raise OSError(7, "Grok prompt exceeds 1MB")
+    return data
+
+
 def arguments(session: str, system: str, prompt: str, effort: str) -> list[str]:
-    document = prompt_document(prompt)
-    if (
-        len(system.encode()) >= PROMPT_JSON_LIMIT
-        or len(document.encode()) >= PROMPT_JSON_LIMIT
-    ):
-        raise OSError(7, "Grok prompt JSON exceeds 120KB")
+    """CLI flags. The prompt itself is never one of them: see prompt_input."""
+    prompt_input(prompt)
+    if len(system.encode()) >= PROMPT_JSON_LIMIT:
+        raise OSError(7, "Grok system prompt exceeds 120KB")
     result = [
         "--session-id", session, "--model", MODEL, "--effort", effort,
         "--no-subagents", "--disable-web-search", "--permission-mode", "dontAsk",
@@ -105,7 +116,7 @@ def arguments(session: str, system: str, prompt: str, effort: str) -> list[str]:
         "--tools", _CHAT_TOOL,
         "--disallowed-tools", _CHAT_DENIED,
         "--system-prompt-override", system,
-        "--prompt-json", document,
+        "--prompt-file", PROMPT_STDIN,
     ]
     if any(len(arg.encode()) >= MAX_ARG_STRLEN for arg in result):
         raise OSError(7, "Argument list too long")
@@ -330,7 +341,10 @@ def stream(
         session, profile, work, args = _prepare(system, prompt, chosen, role)
         raw_lines: list[str] = []
         emitted = ""
-        for line in iter_stdout(profile, work, args, timeout=timeout, cancel=cancel):
+        for line in iter_stdout(
+            profile, work, args, timeout=timeout, cancel=cancel,
+            stdin_data=prompt_input(prompt),
+        ):
             raw_lines.append(line)
             try:
                 row = json.loads(line)
@@ -365,5 +379,8 @@ def complete(
     chosen = chat_effort() if effort is None else effort
     with _home_lock(_home_kind(role)):
         session, profile, work, args = _prepare(system, prompt, chosen, role)
-        raw = execute(profile, work, args, timeout=timeout, cancel=cancel)
+        raw = execute(
+            profile, work, args, timeout=timeout, cancel=cancel,
+            stdin_data=prompt_input(prompt),
+        )
         return parse_turn(raw, session, profile, effort=chosen)

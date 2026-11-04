@@ -29,7 +29,7 @@ CHAT_FLAGS = [
     "--tools",
     "--disallowed-tools",
     "--system-prompt-override",
-    "--prompt-json",
+    "--prompt-file",
 ]
 CHECK_FLAGS = [
     "--session-id",
@@ -122,7 +122,8 @@ def test_chat_check_and_render_pass_only_the_contract_flags():
         assert args[args.index("--output-format") + 1] == "streaming-messages-json"
         assert "--system-prompt-file" not in args
     assert "--include-partial-messages" in chat_args
-    assert "--prompt-json" in chat_args
+    assert "--prompt-json" not in chat_args
+    assert chat_args[chat_args.index("--prompt-file") + 1] == "/dev/stdin"
     for name in ("grok_account_chat.py", "grok_image_check.py", "grok_image_render.py"):
         source = Path(render.__file__).with_name(name).read_text()
         assert '"--system-prompt-file"' not in source
@@ -145,3 +146,25 @@ def test_an_upgrade_candidate_accepts_every_flag_the_scripts_pass():
     assert binary.is_file() and os.access(binary, os.X_OK), candidate
     assert _version(binary) is not None, "candidate does not report a grok version"
     _assert_help_lists_the_contract_flags(binary)
+
+
+def test_the_cli_reads_the_prompt_from_stdin_not_argv(monkeypatch, tmp_path):
+    """A real child process: the prompt arrives on stdin, argv never has it."""
+    import sys as _sys
+
+    secret = "the Commander's private words " * 5000  # past the pipe buffer
+    reader = (
+        "import sys; data = sys.stdin.read(); "
+        "print(len(data)); print(any('private' in a for a in sys.argv))"
+    )
+    monkeypatch.setattr(render, "account_auth", lambda: tmp_path / "auth.json")
+    monkeypatch.setattr(render, "environment", lambda **_k: {"PATH": "/usr/bin:/bin"})
+    monkeypatch.setattr(
+        render, "command", lambda *_a, **_k: [_sys.executable, "-c", reader]
+    )
+    out = render.execute(tmp_path, tmp_path, [], timeout=20, stdin_data=secret.encode())
+    assert out.split() == [str(len(secret)), "False"]
+    lines = list(
+        render.iter_stdout(tmp_path, tmp_path, [], timeout=20, stdin_data=secret.encode())
+    )
+    assert [line.strip() for line in lines] == [str(len(secret)), "False"]

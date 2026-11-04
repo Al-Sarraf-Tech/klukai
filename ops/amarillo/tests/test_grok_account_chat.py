@@ -41,21 +41,24 @@ def test_parse_turn_requires_oauth_grok_4_7_and_low(tmp_path):
         raise AssertionError("high effort was accepted")
 
 
-def test_arguments_put_the_system_text_in_prompt_json():
+def test_arguments_keep_the_conversation_off_argv():
     system = "You are Klukai."
-    args = chat.arguments("s", system, "hello", "low")
+    secret = "the Commander's private words"
+    args = chat.arguments("s", system, secret, "low")
     assert args[args.index("--model") + 1] == "grok-4.7"
     assert args[args.index("--effort") + 1] == "low"
     assert args[args.index("--output-format") + 1] == "streaming-messages-json"
     assert "--include-partial-messages" in args
     assert "--system-prompt-file" not in args
     assert "--single" not in args
+    assert "--prompt-json" not in args
     assert args[args.index("--system-prompt-override") + 1] == system
-    assert system not in args[args.index("--prompt-json") + 1]
+    assert args[args.index("--prompt-file") + 1] == "/dev/stdin"
+    assert not any(secret in arg for arg in args)
+    assert chat.prompt_input(secret) == secret.encode()
     assert args[args.index("--tools") + 1] == "read_file"
     assert "run_terminal_cmd" in args[args.index("--disallowed-tools") + 1]
-    document = json.loads(args[args.index("--prompt-json") + 1])
-    assert document == {
+    assert json.loads(chat.prompt_document("hello")) == {
         "type": "acp",
         "content": [{"type": "text", "text": "hello"}],
     }
@@ -67,10 +70,35 @@ def test_arguments_put_the_system_text_in_prompt_json():
     except OSError as exc:
         assert exc.errno == 7 and "120KB" in exc.strerror
     else:
-        raise AssertionError("an oversized prompt JSON was accepted")
+        raise AssertionError("an oversized system prompt was accepted")
+    try:
+        chat.prompt_input("P" * chat.PROMPT_STDIN_LIMIT)
+    except OSError as exc:
+        assert exc.errno == 7
+    else:
+        raise AssertionError("an oversized prompt was accepted")
 
 
-def _fake_stdout(profile, work, args, timeout=170, *, cancel=None):
+def test_stream_and_complete_send_the_prompt_on_stdin(monkeypatch, tmp_path):
+    monkeypatch.setenv("KLUKAI_GROK_HOME_ROOT", str(tmp_path))
+    fed = []
+
+    def stdout(profile, work, args, timeout=170, *, cancel=None, stdin_data=None):
+        fed.append(stdin_data)
+        yield from _fake_stdout(profile, work, args, timeout=timeout, cancel=cancel)
+
+    def execute(profile, work, args, timeout=170, *, cancel=None, stdin_data=None):
+        fed.append(stdin_data)
+        return "\n".join(_fake_stdout(profile, work, args, timeout=timeout, cancel=cancel))
+
+    monkeypatch.setattr(chat, "iter_stdout", stdout)
+    monkeypatch.setattr(chat, "execute", execute)
+    list(chat.stream("persona", "first line"))
+    chat.complete("persona", "second line")
+    assert fed == [b"first line", b"second line"]
+
+
+def _fake_stdout(profile, work, args, timeout=170, *, cancel=None, stdin_data=None):
     session = args[args.index("--session-id") + 1]
     yield from _stream(session).splitlines()
 
@@ -100,7 +128,7 @@ def test_chat_and_recall_homes_run_together_and_one_role_does_not(monkeypatch, t
     release_chat = threading.Event()
     recall_inside = threading.Event()
 
-    def fake_stdout(profile, work, args, timeout=170, *, cancel=None):
+    def fake_stdout(profile, work, args, timeout=170, *, cancel=None, stdin_data=None):
         kind = profile.parent.name
         if kind == "chat":
             chat_inside.set()
@@ -130,7 +158,7 @@ def test_chat_and_recall_homes_run_together_and_one_role_does_not(monkeypatch, t
     active = {"n": 0, "max": 0}
     guard = threading.Lock()
 
-    def counting_stdout(profile, work, args, timeout=170, *, cancel=None):
+    def counting_stdout(profile, work, args, timeout=170, *, cancel=None, stdin_data=None):
         with guard:
             active["n"] += 1
             active["max"] = max(active["max"], active["n"])

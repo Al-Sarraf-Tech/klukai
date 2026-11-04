@@ -402,13 +402,42 @@ def artifact(profile: Path, session: str, references: list[bytes]) -> bytes:
         raise agy.RuntimeError('Grok did not return one new validated image') from exc
 
 
-def execute(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=None) -> str:
+def _feed(process, data: bytes | None) -> threading.Thread | None:
+    """Write the prompt to the CLI's stdin from a thread, then close it.
+
+    Chat text stays off argv, where ``ps`` and /proc/<pid>/cmdline would show
+    it to every local process. A thread, because a prompt larger than the
+    pipe buffer blocks until the CLI reads it.
+    """
+    if data is None or process.stdin is None:
+        return None
+
+    def write() -> None:
+        try:
+            process.stdin.write(data)
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+        finally:
+            try:
+                process.stdin.close()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+
+    thread = threading.Thread(target=write, daemon=True)
+    thread.start()
+    return thread
+
+
+def execute(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=None,
+            stdin_data: bytes | None = None) -> str:
     started = time.monotonic()
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
         auth = account_auth()
         process = subprocess.Popen(command(profile, work, args, auth=auth), cwd=work,
             env=environment(home=profile, auth=auth),
-            stdin=subprocess.DEVNULL, stdout=out, stderr=err, start_new_session=True)
+            stdin=subprocess.DEVNULL if stdin_data is None else subprocess.PIPE,
+            stdout=out, stderr=err, start_new_session=True)
+        _feed(process, stdin_data)
         cancelled = False
         try:
             if cancel is None:
@@ -462,7 +491,8 @@ def _kill(process) -> None:
         process.wait()
 
 
-def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=None):
+def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, cancel=None,
+                stdin_data: bytes | None = None):
     """Yield stdout lines as the CLI writes them.
 
     Same limits as execute(): MAX_OUTPUT bytes of stdout, the deadline, and a
@@ -474,8 +504,10 @@ def iter_stdout(profile: Path, work: Path, args: list[str], timeout=170, *, canc
     with tempfile.TemporaryFile() as err:
         process = subprocess.Popen(command(profile, work, args, auth=auth), cwd=work,
             env=environment(home=profile, auth=auth),
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err,
+            stdin=subprocess.DEVNULL if stdin_data is None else subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=err,
             start_new_session=True)
+        _feed(process, stdin_data)
         lines: queue.Queue = queue.Queue()
 
         def read() -> None:
