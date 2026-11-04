@@ -155,14 +155,15 @@ def test_the_slow_reply_notice_leaves_room_for_a_normal_xhigh_reply():
 
 def test_she_keeps_more_of_the_conversation_word_for_word():
     from app import context
-    from app.conversation_continuity import HISTORY_LIMIT
+    from app.conversation_continuity import HISTORY_CHUNK, HISTORY_LIMIT
     from app.memory_session import MAX_SESSION_TURNS
 
     # Eight turns is four exchanges. Compaction fires before the session window
-    # would drop turns that were never summarized.
+    # would drop turns that were never summarized, and drops a whole chunk.
     assert context.COMPACT_KEEP_RAW == 8
     assert context.COMPACT_KEEP_RAW < context.COMPACT_THRESHOLD <= MAX_SESSION_TURNS
-    assert context.COMPACT_THRESHOLD < HISTORY_LIMIT
+    assert context.COMPACT_THRESHOLD <= HISTORY_LIMIT
+    assert context.COMPACT_THRESHOLD - context.COMPACT_KEEP_RAW == HISTORY_CHUNK
 
 
 @pytest.mark.parametrize("status", ["failed", "refused", "unavailable", "busy", "unknown"])

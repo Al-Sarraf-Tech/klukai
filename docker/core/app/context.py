@@ -46,6 +46,10 @@ def set_last_memory_id(user_id: str, memory_id: str) -> None:
 # Compaction threshold — compact oldest turns when session exceeds this. These
 # were 8 and 4 when her model was small and local, which left her only two to
 # four exchanges word for word. Her persona is cached now, so history is cheap.
-# Stay below HISTORY_LIMIT: past it, turns drop without being summarized.
-COMPACT_THRESHOLD = 12
+# Compaction drops whole chunks of COMPACT_THRESHOLD - COMPACT_KEEP_RAW turns
+# (HISTORY_CHUNK, 8): the history the model sees then keeps the same first
+# message for four exchanges, so the provider's prompt cache keeps growing
+# instead of restarting at the persona every second exchange. At most
+# HISTORY_LIMIT, so turns never drop without being summarized.
+COMPACT_THRESHOLD = 16
 COMPACT_KEEP_RAW = 8  # Keep this many recent turns verbatim after compaction

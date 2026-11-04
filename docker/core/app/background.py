@@ -174,6 +174,8 @@ async def background_compaction(
     turns with the extraction provider (Claude Haiku when
     KLUKAI_EXTRACTION_PROVIDER=anthropic, else the local model; see
     fact_extractor.compact_turns), keeps the last COMPACT_KEEP_RAW turns verbatim.
+    It folds whole chunks (a multiple of COMPACT_THRESHOLD - COMPACT_KEEP_RAW), so the history prefix the
+    model sees only moves once per chunk and stays in the prompt cache.
     """
     from .fact_extractor import compact_turns
 
@@ -186,7 +188,10 @@ async def background_compaction(
         # Split: compact the old turns, keep the recent ones raw. `prefix` is
         # a snapshot of exactly what gets compacted, compared against the live
         # list after the LLM call below.
-        n_old = len(turns) - context.COMPACT_KEEP_RAW
+        # Whole chunks only, leaving at least COMPACT_KEEP_RAW turns raw.
+        keep = context.COMPACT_KEEP_RAW
+        chunk = max(1, context.COMPACT_THRESHOLD - keep)
+        n_old = ((len(turns) - keep) // chunk) * chunk
         prefix = turns[:n_old]
         old_turns = list(prefix)
 

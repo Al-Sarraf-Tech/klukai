@@ -109,7 +109,7 @@ def store(monkeypatch):
     monkeypatch.setattr(
         background, "get_conn_autocommit", MagicMock(side_effect=RuntimeError("db"))
     )
-    monkeypatch.setattr(background.context, "COMPACT_THRESHOLD", 6)
+    monkeypatch.setattr(background.context, "COMPACT_THRESHOLD", 4)
     monkeypatch.setattr(background.context, "COMPACT_KEEP_RAW", 2)
 
     async def compact(_turns):

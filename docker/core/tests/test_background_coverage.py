@@ -616,7 +616,9 @@ class TestCompaction:
         ct.assert_not_awaited()
         bg_mocks.memory.save_session.assert_not_awaited()
 
-    async def test_at_threshold_compacts_and_keeps_recent_raw(self, bg_mocks):
+    async def test_compaction_folds_whole_chunks_only(self, bg_mocks):
+        # 10 turns, chunk 4: one chunk folds and 6 stay raw, not 4. Folding
+        # 6 would move the cached history prefix off its chunk boundary.
         session = _session(turn_count=10)
         bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
         with patch(
@@ -624,14 +626,25 @@ class TestCompaction:
             new=AsyncMock(return_value="Condensed summary."),
         ):
             await bg.background_compaction(session, user_id="u1")
-        # Keeps exactly COMPACT_KEEP_RAW recent turns + the new summary.
+        assert len(bg_mocks.memory.get_session.return_value.turns) == 6
+
+    async def test_at_threshold_compacts_and_keeps_recent_raw(self, bg_mocks):
+        session = _session(turn_count=12)
+        bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
+        with patch(
+            "app.fact_extractor.compact_turns",
+            new=AsyncMock(return_value="Condensed summary."),
+        ):
+            await bg.background_compaction(session, user_id="u1")
+        # Folds whole chunks (threshold - keep = 4): 8 of the 12 turns, so
+        # exactly COMPACT_KEEP_RAW recent turns stay raw, plus the summary.
         stored = bg_mocks.memory.get_session.return_value
         assert stored.context_summary == "Condensed summary."
         assert len(stored.turns) == bg_mocks.context.COMPACT_KEEP_RAW
         bg_mocks.memory.save_session.assert_awaited_once()
 
     async def test_existing_summary_prepended_to_compaction_input(self, bg_mocks):
-        session = _session(turn_count=10, context_summary="Older context.")
+        session = _session(turn_count=12, context_summary="Older context.")
         ct = AsyncMock(return_value="New rollup.")
         with patch("app.fact_extractor.compact_turns", new=ct):
             await bg.background_compaction(session, user_id="u1")
@@ -640,7 +653,7 @@ class TestCompaction:
         assert "Older context." in passed_turns[0]["content"]
 
     async def test_empty_summary_keeps_raw_turns_unchanged(self, bg_mocks):
-        session = _session(turn_count=10)
+        session = _session(turn_count=12)
         bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
         original = list(session.turns)
         with patch("app.fact_extractor.compact_turns", new=AsyncMock(return_value="")):
@@ -650,7 +663,7 @@ class TestCompaction:
         bg_mocks.memory.save_session.assert_not_awaited()
 
     async def test_compaction_exception_swallowed(self, bg_mocks):
-        session = _session(turn_count=10)
+        session = _session(turn_count=12)
         bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
         original_turns = list(session.turns)
         ct = AsyncMock(side_effect=RuntimeError("boom"))
@@ -666,7 +679,7 @@ class TestCompaction:
         """The chat keeps going while the LLM summarises. Replacing the list
         with the stale "recent" slice dropped whatever was appended meanwhile;
         deleting the compacted prefix in place keeps it."""
-        session = _session(turn_count=10)
+        session = _session(turn_count=12)
         bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
         appended = {"role": "user", "content": "sent while compacting"}
 
@@ -682,16 +695,16 @@ class TestCompaction:
         stored = bg_mocks.memory.get_session.return_value
         assert stored.context_summary == "Condensed summary."
         assert stored.turns[-1] == appended
-        # COMPACT_KEEP_RAW raw turns kept (Turn 6..9) plus the one that arrived.
+        # COMPACT_KEEP_RAW raw turns kept (Turn 8..11) plus the one that arrived.
         assert len(stored.turns) == bg_mocks.context.COMPACT_KEEP_RAW + 1
-        assert stored.turns[0] == {"role": "user", "content": "Turn 6"}
+        assert stored.turns[0] == {"role": "user", "content": "Turn 8"}
         bg_mocks.memory.save_session.assert_awaited_once()
 
     async def test_compaction_aborts_when_prefix_changed_underneath(self, bg_mocks):
         """If the turns being compacted are no longer at the head of the live
         list (another compaction, a session restore), the summary is stale:
         leave the session alone rather than apply it."""
-        session = _session(turn_count=10)
+        session = _session(turn_count=12)
         bg_mocks.memory.get_session.return_value = session.model_copy(deep=True)
         fresh = [{"role": "user", "content": f"fresh {i}"} for i in range(4)]
 
