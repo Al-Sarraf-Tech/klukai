@@ -51,17 +51,13 @@ services:
       FISH_API_KEY: "${FISH_API_KEY:-}"
       KLUKAI_FISH_VOICE_ID: "${KLUKAI_FISH_VOICE_ID:-47fc35b7311944bc9fa238ed856de1f3}"
       KLUKAI_FISH_MODEL: "${KLUKAI_FISH_MODEL:-s2.1-pro-free}"
-      # The Grok tier of chat is the xAI API when KLUKAI_XAI_API_KEY is loaded
-      # (owner, 2026-10-31), with the account-login CLI as its fallback. The key
-      # file is not copied into the image. Pictures use the same key in the
-      # host worker.
+      # Chat is the xAI API when KLUKAI_XAI_API_KEY is loaded (owner, 2026-10-31).
+      # The account-login CLI is the fallback. The key file is not copied into
+      # the image. Pictures use the same key in the host worker.
       KLUKAI_CHAT_BACKEND: "${KLUKAI_CHAT_BACKEND:-api}"
-      # One UTC-day USD cap across xAI chat, stories, pictures and Claude Haiku
-      # (chat and background), held before each paid call (owner, 2026-11-04).
       KLUKAI_API_DAILY_USD_CAP: "${KLUKAI_API_DAILY_USD_CAP:-5}"
       KLUKAI_XAI_LEDGER: "/var/klukai/xai/xai-spend.sqlite3"
-      # With both set, chat streams from Claude Haiku 5.5 at xhigh first and
-      # background text uses Haiku at low; Grok answers when Haiku fails.
+      # These Claude variables are not the chat path and do not open a client.
       KLUKAI_CLAUDE_PRIMARY: "${KLUKAI_CLAUDE_PRIMARY:-false}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       # agy is the account-worker bridge. The host unit selects Grok.
