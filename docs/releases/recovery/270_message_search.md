@@ -96,11 +96,21 @@ automation.
 If migration 270 itself fails, its transaction leaves no applied-270 ledger
 entry. Automatic rollback with the forward snapshot will retry the same
 migration and can fail again if the cause persists. This is a material limit,
-not a guaranteed rollback. Inspect only migration-ledger metadata through
-the runtime wrapper: if 270 is absent and every prior migration/hash matches
-the previous image, remove the temporary bind and recreate the previous
-image using its original migrations. If 270 is present, retain the forward
-snapshot. Never remove a committed ledger entry or alter its recorded hash.
+not a guaranteed rollback. Do not decide from an unlocked ledger observation
+while a startup migration may still be running. If core has started with the
+forward snapshot, first stop that core and confirm it is stopped; keep
+automation paused and the deployment lock held. Acquire the existing
+migration runner's advisory transaction lock, then inspect only ledger
+metadata in a fresh READ COMMITTED statement through the runtime wrapper;
+a repeatable-read snapshot taken before the wait would be stale. This waits for any pending migration
+transaction to commit or roll back before the mount decision. If 270 is
+absent and every prior migration/hash matches the previous image, remove
+the temporary bind and recreate the previous image using its original
+migrations. If 270 committed meanwhile, retain the forward snapshot and
+recover the previous image with that mount. Defer Ctrl-C during this
+supplemental recovery, just as the normal coordinated restore does. A
+healthy, unmounted previous core on a pre-rollout refusal does not need to
+be stopped. Never remove a committed ledger entry or alter its recorded hash.
 Do not retry index creation indefinitely against a persistent lock or
 privilege failure; recover the previous app as above and investigate.
 
@@ -136,6 +146,9 @@ and the source context belongs to the authenticated user/conversation.
 After rollback, verify the previous immutable image, its healthy/ready
 state, the preserved snapshot mount and matching migration ledger, previous
 atomic web release, aggregate data checks and the same read-only live checks.
+Account for affection-score movement against logged score deltas on recovery
+as well as forward release; an unaccounted change requires review and cannot
+be reported as verified preservation.
 No test or rollback may send a chat message, generate an image, or alter
 Fish voice/provider settings.
 
