@@ -31,7 +31,7 @@ Use final synthetic index evidence in `/tmp/klukai-search-feasibility-20261107.m
 Run existing focused history/auth boundary tests as baseline before edits, then new unit/real-PG tests and relevant regressions. Use already installed environments/dependencies only. Ask controller for disposable DB if unavailable; never use production. Run linter configured for changed code. Self-review and commit only your files. Report exact commands, counts, red/green evidence, index evidence, limitations and commits to the designated report file. Do not dispatch subagents.
 
 - [x] Backend implementation and unit/real-PG proof
-- [ ] Independent task review and fixes
+- [x] Independent task review and fixes
 
 ### Task 2: Search and source-reader Flutter UI
 
@@ -43,8 +43,8 @@ Add meaningful service and widget tests under `flutter_app/test/` with MockClien
 
 Run focused tests while iterating; once green run Flutter analyze and the full existing Flutter test suite once (capture failures accurately), then build web using the repository's pinned toolchain. Self-review, commit only task files, report exact verification, red/green evidence and limitations to designated report. No push/deploy/subagents. Controller handles browser inspection, whole-branch review and CI/release.
 
-- [ ] Flutter implementation and behavior/layout tests
-- [ ] Independent task review and fixes
+- [x] Flutter implementation and behavior/layout tests
+- [x] Independent task review and fixes
 
 ## Controller completion
 
