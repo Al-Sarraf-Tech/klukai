@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, sql
 from pydantic import (
     AwareDatetime,
     BaseModel,
@@ -115,22 +115,22 @@ async def search_messages(user_id: str, request: SearchRequest) -> dict[str, Any
         + "%"
     )
     conditions = [
-        "user_id = %s",
-        "role IN ('user', 'assistant')",
-        "content ILIKE %s ESCAPE E'\\\\'",
+        sql.SQL("user_id = %s"),
+        sql.SQL("role IN ('user', 'assistant')"),
+        sql.SQL("content ILIKE %s ESCAPE E'\\\\'"),
     ]
     params: list[Any] = [user_id, pattern]
     if request.speaker != "all":
-        conditions.append("role = %s")
+        conditions.append(sql.SQL("role = %s"))
         params.append(request.speaker)
     if request.start is not None:
-        conditions.append("created_at >= %s")
+        conditions.append(sql.SQL("created_at >= %s"))
         params.append(request.start)
     if request.end is not None:
-        conditions.append("created_at < %s")
+        conditions.append(sql.SQL("created_at < %s"))
         params.append(request.end)
     if request.cursor is not None:
-        conditions.append("(created_at, id) < (%s, %s)")
+        conditions.append(sql.SQL("(created_at, id) < (%s, %s)"))
         params.extend((request.cursor.created_at, request.cursor.id))
     params.append(21)
     async with get_pool().connection() as conn, conn.transaction():
@@ -139,10 +139,11 @@ async def search_messages(user_id: str, request: SearchRequest) -> dict[str, Any
         # regex can pick different Unicode matches and shift source offsets.
         rows = await (
             await conn.execute(
-                "SELECT id, role, content, created_at, "
-                "strpos(lower(content), lower(%s)) - 1 FROM companion_messages WHERE "
-                + " AND ".join(conditions)
-                + " ORDER BY created_at DESC, id DESC LIMIT %s",
+                sql.SQL(
+                    "SELECT id, role, content, created_at, "
+                    "strpos(lower(content), lower(%s)) - 1 FROM companion_messages "
+                    "WHERE {conditions} ORDER BY created_at DESC, id DESC LIMIT %s"
+                ).format(conditions=sql.SQL(" AND ").join(conditions)),
                 [request.query, *params],
                 # Common and selective phrases need different plans; keep bound
                 # values while avoiding a cached generic prepared query plan.
@@ -172,13 +173,17 @@ async def _side(
     older: bool,
     limit: int,
 ) -> list[tuple[Any, ...]]:
-    comparison, order = ("<", "DESC") if older else (">", "ASC")
+    comparison, order = (
+        (sql.SQL("<"), sql.SQL("DESC")) if older else (sql.SQL(">"), sql.SQL("ASC"))
+    )
     return await (
         await conn.execute(
-            "SELECT id, role, content, created_at FROM companion_messages "
-            "WHERE user_id = %s AND conversation_id = %s AND role IN ('user', 'assistant') "
-            f"AND (created_at, id) {comparison} (%s, %s) "
-            f"ORDER BY created_at {order}, id {order} LIMIT %s",
+            sql.SQL(
+                "SELECT id, role, content, created_at FROM companion_messages "
+                "WHERE user_id = %s AND conversation_id = %s AND role IN ('user', 'assistant') "
+                "AND (created_at, id) {comparison} (%s, %s) "
+                "ORDER BY created_at {order}, id {order} LIMIT %s"
+            ).format(comparison=comparison, order=order),
             (user_id, conversation_id, cursor.created_at, cursor.id, limit),
             prepare=False,
         )
@@ -193,12 +198,14 @@ async def _has_side(
     *,
     older: bool,
 ) -> bool:
-    comparison = "<" if older else ">"
+    comparison = sql.SQL("<") if older else sql.SQL(">")
     found = await (
         await conn.execute(
-            "SELECT EXISTS (SELECT 1 FROM companion_messages "
-            "WHERE user_id = %s AND conversation_id = %s AND role IN ('user', 'assistant') "
-            f"AND (created_at, id) {comparison} (%s, %s))",
+            sql.SQL(
+                "SELECT EXISTS (SELECT 1 FROM companion_messages "
+                "WHERE user_id = %s AND conversation_id = %s AND role IN ('user', 'assistant') "
+                "AND (created_at, id) {comparison} (%s, %s))"
+            ).format(comparison=comparison),
             (user_id, conversation_id, row[3], row[0]),
             prepare=False,
         )
