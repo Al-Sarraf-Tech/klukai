@@ -8,8 +8,13 @@ from uuid import UUID
 
 from psycopg import AsyncConnection
 from pydantic import (
-    AwareDatetime, BaseModel, BeforeValidator, ConfigDict, StrictStr,
-    field_validator, model_validator,
+    AwareDatetime,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    StrictStr,
+    field_validator,
+    model_validator,
 )
 
 from .db import get_pool
@@ -76,7 +81,11 @@ def make_excerpt(content: str, match_start: int) -> str:
     """Slice original code points around the database-computed match offset."""
     start = max(0, match_start - 80)
     end = min(len(content), start + 400)
-    return ("…" if start else "") + content[start:end] + ("…" if end < len(content) else "")
+    return (
+        ("…" if start else "")
+        + content[start:end]
+        + ("…" if end < len(content) else "")
+    )
 
 
 def _cursor(row: tuple[Any, ...]) -> dict[str, str]:
@@ -84,7 +93,12 @@ def _cursor(row: tuple[Any, ...]) -> dict[str, str]:
 
 
 def _message(row: tuple[Any, ...]) -> dict[str, str]:
-    return {"id": str(row[0]), "role": row[1], "content": row[2], "created_at": row[3].isoformat()}
+    return {
+        "id": str(row[0]),
+        "role": row[1],
+        "content": row[2],
+        "created_at": row[3].isoformat(),
+    }
 
 
 async def _read_transaction(conn: AsyncConnection[tuple[Any, ...]]) -> None:
@@ -95,8 +109,16 @@ async def _read_transaction(conn: AsyncConnection[tuple[Any, ...]]) -> None:
 
 
 async def search_messages(user_id: str, request: SearchRequest) -> dict[str, Any]:
-    pattern = "%" + request.query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
-    conditions = ["user_id = %s", "role IN ('user', 'assistant')", "content ILIKE %s ESCAPE E'\\\\'"]
+    pattern = (
+        "%"
+        + request.query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        + "%"
+    )
+    conditions = [
+        "user_id = %s",
+        "role IN ('user', 'assistant')",
+        "content ILIKE %s ESCAPE E'\\\\'",
+    ]
     params: list[Any] = [user_id, pattern]
     if request.speaker != "all":
         conditions.append("role = %s")
@@ -115,79 +137,120 @@ async def search_messages(user_id: str, request: SearchRequest) -> dict[str, Any
         await _read_transaction(conn)
         # Locate the match with PostgreSQL case semantics; Python casefold or
         # regex can pick different Unicode matches and shift source offsets.
-        rows = await (await conn.execute(
-            "SELECT id, role, content, created_at, "
-            "strpos(lower(content), lower(%s)) - 1 FROM companion_messages WHERE "
-            + " AND ".join(conditions) + " ORDER BY created_at DESC, id DESC LIMIT %s",
-            [request.query, *params],
-            # Common and selective phrases need different plans; keep bound
-            # values while avoiding a cached generic prepared query plan.
-            prepare=False,
-        )).fetchall()
+        rows = await (
+            await conn.execute(
+                "SELECT id, role, content, created_at, "
+                "strpos(lower(content), lower(%s)) - 1 FROM companion_messages WHERE "
+                + " AND ".join(conditions)
+                + " ORDER BY created_at DESC, id DESC LIMIT %s",
+                [request.query, *params],
+                # Common and selective phrases need different plans; keep bound
+                # values while avoiding a cached generic prepared query plan.
+                prepare=False,
+            )
+        ).fetchall()
     return {
         "messages": [
-            {"id": str(row[0]), "role": row[1], "excerpt": make_excerpt(row[2], row[4]), "created_at": row[3].isoformat()}
+            {
+                "id": str(row[0]),
+                "role": row[1],
+                "excerpt": make_excerpt(row[2], row[4]),
+                "created_at": row[3].isoformat(),
+            }
             for row in rows[:20]
         ],
         "next_cursor": _cursor(rows[19]) if len(rows) > 20 else None,
     }
 
 
-async def _side(conn: AsyncConnection[tuple[Any, ...]], user_id: str, conversation_id: UUID, cursor: Cursor, *, older: bool, limit: int) -> list[tuple[Any, ...]]:
+async def _side(
+    conn: AsyncConnection[tuple[Any, ...]],
+    user_id: str,
+    conversation_id: UUID,
+    cursor: Cursor,
+    *,
+    older: bool,
+    limit: int,
+) -> list[tuple[Any, ...]]:
     comparison, order = ("<", "DESC") if older else (">", "ASC")
-    return await (await conn.execute(
-        "SELECT id, role, content, created_at FROM companion_messages "
-        "WHERE user_id = %s AND conversation_id = %s AND role IN ('user', 'assistant') "
-        f"AND (created_at, id) {comparison} (%s, %s) "
-        f"ORDER BY created_at {order}, id {order} LIMIT %s",
-        (user_id, conversation_id, cursor.created_at, cursor.id, limit),
-        prepare=False,
-    )).fetchall()
+    return await (
+        await conn.execute(
+            "SELECT id, role, content, created_at FROM companion_messages "
+            "WHERE user_id = %s AND conversation_id = %s AND role IN ('user', 'assistant') "
+            f"AND (created_at, id) {comparison} (%s, %s) "
+            f"ORDER BY created_at {order}, id {order} LIMIT %s",
+            (user_id, conversation_id, cursor.created_at, cursor.id, limit),
+            prepare=False,
+        )
+    ).fetchall()
 
 
-async def _has_side(conn: AsyncConnection[tuple[Any, ...]], user_id: str, conversation_id: UUID, row: tuple[Any, ...], *, older: bool) -> bool:
+async def _has_side(
+    conn: AsyncConnection[tuple[Any, ...]],
+    user_id: str,
+    conversation_id: UUID,
+    row: tuple[Any, ...],
+    *,
+    older: bool,
+) -> bool:
     comparison = "<" if older else ">"
-    found = await (await conn.execute(
-        "SELECT EXISTS (SELECT 1 FROM companion_messages "
-        "WHERE user_id = %s AND conversation_id = %s AND role IN ('user', 'assistant') "
-        f"AND (created_at, id) {comparison} (%s, %s))",
-        (user_id, conversation_id, row[3], row[0]),
-        prepare=False,
-    )).fetchone()
+    found = await (
+        await conn.execute(
+            "SELECT EXISTS (SELECT 1 FROM companion_messages "
+            "WHERE user_id = %s AND conversation_id = %s AND role IN ('user', 'assistant') "
+            f"AND (created_at, id) {comparison} (%s, %s))",
+            (user_id, conversation_id, row[3], row[0]),
+            prepare=False,
+        )
+    ).fetchone()
     assert found is not None
     return bool(found[0])
 
 
-async def get_message_context(user_id: str, request: ContextRequest) -> dict[str, Any] | None:
+async def get_message_context(
+    user_id: str, request: ContextRequest
+) -> dict[str, Any] | None:
     async with get_pool().connection() as conn, conn.transaction():
         await _read_transaction(conn)
-        anchor = await (await conn.execute(
-            "SELECT id, role, content, created_at, conversation_id FROM companion_messages "
-            "WHERE user_id = %s AND id = %s AND role IN ('user', 'assistant')",
-            (user_id, request.anchor_id),
-        )).fetchone()
+        anchor = await (
+            await conn.execute(
+                "SELECT id, role, content, created_at, conversation_id FROM companion_messages "
+                "WHERE user_id = %s AND id = %s AND role IN ('user', 'assistant')",
+                (user_id, request.anchor_id),
+            )
+        ).fetchone()
         if anchor is None:
             return None
         conversation_id = anchor[4]
         if request.before is None and request.after is None:
             center = Cursor(created_at=anchor[3], id=anchor[0])
-            left = await _side(conn, user_id, conversation_id, center, older=True, limit=11)
-            right = await _side(conn, user_id, conversation_id, center, older=False, limit=11)
+            left = await _side(
+                conn, user_id, conversation_id, center, older=True, limit=11
+            )
+            right = await _side(
+                conn, user_id, conversation_id, center, older=False, limit=11
+            )
             rows = list(reversed(left[:10])) + [anchor] + right[:10]
             older, newer = len(left) > 10, len(right) > 10
         else:
             is_older = request.before is not None
             edge = request.before if is_older else request.after
             assert edge is not None
-            fetched = await _side(conn, user_id, conversation_id, edge, older=is_older, limit=21)
+            fetched = await _side(
+                conn, user_id, conversation_id, edge, older=is_older, limit=21
+            )
             rows = list(reversed(fetched[:20])) if is_older else fetched[:20]
             older = newer = False
             if rows:
                 if is_older:
                     older = len(fetched) > 20
-                    newer = await _has_side(conn, user_id, conversation_id, rows[-1], older=False)
+                    newer = await _has_side(
+                        conn, user_id, conversation_id, rows[-1], older=False
+                    )
                 else:
-                    older = await _has_side(conn, user_id, conversation_id, rows[0], older=True)
+                    older = await _has_side(
+                        conn, user_id, conversation_id, rows[0], older=True
+                    )
                     newer = len(fetched) > 20
         return {
             "anchor_id": str(request.anchor_id),

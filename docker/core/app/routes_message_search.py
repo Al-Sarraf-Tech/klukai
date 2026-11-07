@@ -48,7 +48,11 @@ class _PrivateRoute(APIRoute):
                 status = 422 if exc.status_code == 400 else exc.status_code
                 return _response({"error": "Invalid request"}, status)
             except Exception as exc:
-                logger.warning("Conversation search %s unavailable: %s", self.name, type(exc).__name__)
+                logger.warning(
+                    "Conversation search %s unavailable: %s",
+                    self.name,
+                    type(exc).__name__,
+                )
                 return _response({"error": "Conversation search unavailable"}, 503)
             response.headers["Cache-Control"] = "no-store"
             return response
@@ -56,7 +60,9 @@ class _PrivateRoute(APIRoute):
         return private_handler
 
 
-def register_message_search(app: FastAPI, resolve_user: Callable[[Request], Awaitable[str | None]]) -> None:
+def register_message_search(
+    app: FastAPI, resolve_user: Callable[[Request], Awaitable[str | None]]
+) -> None:
     router = APIRouter(route_class=_PrivateRoute)
 
     @router.post("/api/messages/search")
