@@ -18,6 +18,7 @@ from .context import ws, memory, affection
 from .auth import is_admin
 from .passwords import PasswordWorkBusy
 from .db import get_pool
+from .routes_message_search import register_message_search
 from .routes_voice_input import register_voice_input
 from .routes_voice_settings import register_voice_settings
 from .runtime_tasks import ApplicationClosing, spawn
@@ -54,6 +55,7 @@ async def _get_user_id(request: Request) -> str | None:
 
 def register_extras(app: FastAPI) -> None:
     """Register group-1 HTTP endpoints."""
+    register_message_search(app, _get_user_id)
 
     @app.post("/api/mission")
     async def api_mission(request: Request) -> Any:

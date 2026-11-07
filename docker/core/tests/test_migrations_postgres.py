@@ -56,9 +56,9 @@ async def legacy_schema(pool, before=None):
 
 async def test_fresh_schema_then_repeat_changes_nothing(migration_pool):
     applied = await apply_migrations(migration_pool, MIGRATIONS)
-    assert len(applied) == 27
+    assert len(applied) == 28
     assert await rows(migration_pool, "SELECT count(*) FROM companion_gifts") == [(1,)]
-    assert await rows(migration_pool, "SELECT count(*) FROM companion_schema_migrations") == [(27,)]
+    assert await rows(migration_pool, "SELECT count(*) FROM companion_schema_migrations") == [(28,)]
     assert await rows(
         migration_pool,
         "SELECT data_type, is_nullable FROM information_schema.columns "
@@ -245,7 +245,7 @@ async def test_cloud_only_migration_preserves_annotations_and_history(migration_
         )[0]
         await conn.commit()
     assert mem_id
-    assert await apply_migrations(migration_pool, MIGRATIONS) == ["260_memory_full_text_search.sql"]
+    assert await apply_migrations(migration_pool, MIGRATIONS) == ["260_memory_full_text_search.sql", "270_message_search.sql"]
     rows_ = await rows(
         migration_pool,
         "SELECT annotation, jsonb_path_query_array(annotation_history, '$[*].annotation') "
