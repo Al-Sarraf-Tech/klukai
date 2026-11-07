@@ -185,3 +185,45 @@ async def test_method_errors_on_private_routes_are_no_store(search_client, path)
     response = await client.get(f"/api/messages/{path}")
     assert response.status_code == 405
     assert response.headers.get("cache-control") == "no-store"
+
+
+@pytest.mark.parametrize("timestamp", ["123", "1735689600", "-123.5", "+123"])
+@pytest.mark.parametrize("location", ["start", "end", "cursor", "before", "after"])
+async def test_numeric_string_timestamps_are_rejected_at_every_boundary(search_client, location, timestamp):
+    client, _, search, context = search_client
+    cursor = {"created_at": timestamp, "id": str(UUID(int=2))}
+    path = "context" if location in {"before", "after"} else "search"
+    if path == "context":
+        body = {"anchor_id": str(UUID(int=1)), location: cursor}
+    else:
+        body = {"query": "rain", location: cursor if location == "cursor" else timestamp}
+    response = await client.post(f"/api/messages/{path}", json=body)
+    assert response.status_code == 422
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {"error": "Invalid request"}
+    assert not search.called and not context.called
+
+
+@pytest.mark.parametrize("timestamp", ["2026-11-01T00:00:00Z", "2026-11-01T02:00:00.123456+02:00"])
+@pytest.mark.parametrize("location", ["start", "end", "cursor", "before", "after"])
+async def test_aware_iso_timestamps_remain_valid_at_every_boundary(search_client, location, timestamp):
+    client, _, _, context = search_client
+    context.return_value = {"anchor_id": str(UUID(int=1)), "messages": [], "older_cursor": None, "newer_cursor": None}
+    cursor = {"created_at": timestamp, "id": str(UUID(int=2))}
+    path = "context" if location in {"before", "after"} else "search"
+    if path == "context":
+        body = {"anchor_id": str(UUID(int=1)), location: cursor}
+    else:
+        body = {"query": "rain", location: cursor if location == "cursor" else timestamp}
+    response = await client.post(f"/api/messages/{path}", json=body)
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_internal_aware_datetime_cursor_is_preserved():
+    from datetime import datetime, timezone
+    from app.message_search import Cursor
+
+    instant = datetime(2026, 11, 1, tzinfo=timezone.utc)
+    cursor = Cursor(created_at=instant, id=UUID(int=2))
+    assert cursor.created_at == instant

@@ -18,7 +18,11 @@ from .db import get_pool
 def _iso_instant(value: Any) -> Any:
     # Pydantic also accepts numeric epoch timestamps by default; this HTTP
     # contract accepts timezone-aware ISO instants only.
-    if not isinstance(value, (str, datetime)):
+    if isinstance(value, str):
+        # Parse ISO syntax before AwareDatetime can treat numeric strings as
+        # Unix epochs. The downstream validator still rejects naive instants.
+        return datetime.fromisoformat(value)
+    if not isinstance(value, datetime):
         raise ValueError("Expected an ISO instant")
     return value
 
