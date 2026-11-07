@@ -43,6 +43,8 @@ import 'hud_day_screen.dart';
 import 'hud_kit_screen.dart';
 import 'hud_me_screen.dart';
 import 'thread_screen.dart';
+import 'conversation_search_screen.dart';
+import '../services/conversation_search_service.dart';
 
 part 'chat_wire_events.dart';
 
@@ -109,7 +111,7 @@ class ChatScreen extends StatefulWidget {
   /// Microphone bridge. Defaults to the page audioRecorder; tests inject a fake.
   final SpeechBridge? speechBridge;
 
-  /// HTTP client for speech transcription and the 3D view's voice fallback.
+  /// HTTP client for search, speech transcription and the 3D voice fallback.
   /// History keeps the shared client.
   final http.Client? httpClient;
 

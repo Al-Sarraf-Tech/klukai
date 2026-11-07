@@ -3,6 +3,23 @@ part of 'chat_screen.dart';
 /// Authenticated screen navigation and ordered service-worker logout.
 /// Shares the screen's single State owner; no transport or state is duplicated.
 extension _ChatNavigation on _ChatScreenState {
+  void _openConversationSearch() {
+    final service = ConversationSearchService(
+      serverUrl: widget.serverUrl,
+      client: widget.httpClient,
+    );
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ConversationSearchScreen(
+          serverUrl: widget.serverUrl,
+          service: service,
+          onAuthExpired: _handleAuthExpired,
+        ),
+      ),
+    ).whenComplete(service.dispose);
+  }
+
   void _openProfile() {
     Navigator.push(
       context,

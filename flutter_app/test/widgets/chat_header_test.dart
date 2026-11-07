@@ -76,6 +76,35 @@ int _lit(WidgetTester tester) =>
     find.byKey(const Key('pip-on')).evaluate().length;
 
 void main() {
+  testWidgets('search menu remains usable at 320px with enlarged text', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(320, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    ChatMenuAction? chosen;
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: TextScaler.linear(2)),
+          child: child!,
+        ),
+        home: Scaffold(
+          body: ChatMenuButton(onSelected: (action) => chosen = action),
+        ),
+      ),
+    );
+    await tester.tap(find.byKey(const Key('chat-menu')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    await tester.ensureVisible(find.byKey(const Key('chat-menu-search')));
+    await tester.tap(find.byKey(const Key('chat-menu-search')));
+    await tester.pumpAndSettle();
+    expect(chosen, ChatMenuAction.search);
+  });
+
   for (final width in [320.0, 340.0, 360.0, 375.0, 390.0, 414.0, 430.0]) {
     testWidgets('no overflow at ${width.toInt()}px', (tester) async {
       await _pump(

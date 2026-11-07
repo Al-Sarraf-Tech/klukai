@@ -104,6 +104,8 @@ void main() {
     await tester.pump();
     await tester.tap(find.byKey(const Key('composer-send')));
     await tester.tap(find.byKey(const Key('composer-picture')));
+    // Browser button clicks move focus; an IME action needs the editor active.
+    await tester.showKeyboard(find.byType(TextField));
     await tester.testTextInput.receiveAction(TextInputAction.send);
     expect(calls.sends, 2);
     expect(calls.pictures, 1);

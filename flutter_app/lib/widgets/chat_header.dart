@@ -11,7 +11,7 @@ enum ChatViewMode { chat, threeD }
 
 /// What the chat menu holds: the entry points that lost their header buttons
 /// when the tab bar took over Album, Day and Me.
-enum ChatMenuAction { companion, threads, herPov, subscription, logout }
+enum ChatMenuAction { companion, threads, search, herPov, subscription, logout }
 
 /// Highest affinity level; the pips count up to it.
 const int kMaxAffinityLevel = 9;
@@ -652,6 +652,7 @@ class ChatMenuButton extends StatelessWidget {
     itemBuilder: (_) => [
       _item(ChatMenuAction.companion, Icons.open_in_new, 'Companion stage'),
       _item(ChatMenuAction.threads, Icons.forum_outlined, 'Threads'),
+      _item(ChatMenuAction.search, Icons.search, 'Search conversations'),
       _item(ChatMenuAction.herPov, Icons.auto_awesome, 'Her POV'),
       _item(
         ChatMenuAction.subscription,
@@ -680,7 +681,12 @@ class ChatMenuButton extends StatelessWidget {
       children: [
         Icon(icon, size: 18, color: color),
         const SizedBox(width: 12),
-        Text(label.toUpperCase(), style: HudText.label(size: 11, color: color)),
+        Expanded(
+          child: Text(
+            label.toUpperCase(),
+            style: HudText.label(size: 11, color: color),
+          ),
+        ),
       ],
     ),
   );

@@ -116,6 +116,8 @@ extension _ChatView on _ChatScreenState {
         _openCompanion();
       case ChatMenuAction.threads:
         _openThreads();
+      case ChatMenuAction.search:
+        _openConversationSearch();
       case ChatMenuAction.herPov:
         _openHerPov();
       case ChatMenuAction.subscription:
