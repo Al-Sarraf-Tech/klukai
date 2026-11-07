@@ -1,0 +1,42 @@
+{
+  "passed": true,
+  "started_at": "2026-11-07T23:16:16.416467+00:00",
+  "finished_at": "2026-11-07T23:17:39.684055+00:00",
+  "previous_core_image": "sha256:c75718aebca435b8b65150028a035269ba526d3d6d7b2a4cdf7bc17aad9a987c",
+  "postgres_image": "sha256:650b442ec4f71f47b92505de963bbc4054f8c7df0df30956aef30e27d7e4dea4",
+  "migration_270_sha256": "9d5b77e8c4ba4a6a94a061f92afdd2ba3937e65bc307f5e87c7c289a97001e1d",
+  "snapshot_manifest_sha256": "85ad97f381c16cb1fd95692f0155330bb38ff7c8d2efc88e9b7bd09cc6063cd7",
+  "prior_migration_count": 27,
+  "candidate_migration_count": 28,
+  "forward_migration_seconds": 0.227877,
+  "previous_image_recovery_seconds": 0.002399,
+  "expected_without_mount_error": "Applied migration is missing: 270_message_search.sql",
+  "old_runner_with_mount_applied": [],
+  "idempotent_applied": [],
+  "extension_schema": [
+    "public"
+  ],
+  "index": [
+    "search_rollback_proof",
+    "idx_messages_content_trgm",
+    true,
+    "CREATE INDEX idx_messages_content_trgm ON search_rollback_proof.companion_messages USING gin (content public.gin_trgm_ops)"
+  ],
+  "database_role": [
+    "proof_owner",
+    false,
+    false
+  ],
+  "source_and_previous_migration_runner_identical": true,
+  "network_mode": "none for database and all migration-runner containers",
+  "cleanup": true,
+  "scope": "synthetic database only; no application startup or inference",
+  "preservation": {
+    "tables": 30,
+    "baseline_messages": 10001,
+    "postwrite_messages": 10002,
+    "baseline_affection": 124,
+    "postwrite_affection": 131,
+    "all_row_hashes_unchanged_after_forward_and_recovery": true
+  }
+}
