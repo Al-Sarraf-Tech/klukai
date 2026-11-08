@@ -1,0 +1,66 @@
+{
+  "cves": [
+    "CVE-2026-119373",
+    "CVE-2026-119374",
+    "CVE-2026-119379"
+  ],
+  "expires_at": "2026-12-01T00:00:00Z",
+  "fixed_evidence": {
+    "CVE-2026-119373": "https://security-tracker.debian.org/tracker/CVE-2026-119373",
+    "CVE-2026-119374": "https://security-tracker.debian.org/tracker/CVE-2026-119374",
+    "CVE-2026-119379": "https://security-tracker.debian.org/tracker/CVE-2026-119379"
+  },
+  "id": "klukai-debian-sqlite-3.54.1-2-amd64-20261107",
+  "issued_at": "2026-11-07T00:00:00Z",
+  "loader_environment": {
+    "LD_LIBRARY_PATH": "/usr/local/lib:/opt/runtime-libs"
+  },
+  "os": {
+    "Family": "debian",
+    "Name": "13.7"
+  },
+  "packages": [
+    {
+      "architecture": "amd64",
+      "library_sha256": "225ceb839db2c1dd484cfcaa5ef9fbdd429eb1d5f1e0c39fbd50150bca5fc7bc",
+      "package": "libsqlite3-0",
+      "purl": "pkg:deb/debian/libsqlite3-0@3.54.1-2?arch=amd64&distro=debian-13.7",
+      "runtime_library": "/opt/runtime-libs/libsqlite3.so.0",
+      "sha256": "7789bf0b2338b781de388d83d7c473f9386c9ef638af110b5c1b3d1debb36f00",
+      "source": "sqlite3",
+      "url": "https://deb.debian.org/debian/pool/main/s/sqlite3/libsqlite3-0_3.54.1-2_amd64.deb",
+      "version": "3.54.1-2"
+    },
+    {
+      "architecture": "amd64",
+      "library_sha256": "6c13931760210e8b391b63a337dfe4071346c4ad6e3827694edb7b6989bb16dd",
+      "package": "zlib1g",
+      "purl": "pkg:deb/debian/zlib1g@1.3.dfsg%2Breally1.3.1-1%2Bdeb13u1?arch=amd64&distro=debian-13.7&epoch=1",
+      "runtime_library": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+      "sha256": "8c27c342230503b73dfde629642c3b352e87b554e06d60cf58772f236a305ceb",
+      "source": "zlib",
+      "url": "https://security.debian.org/debian-security/pool/updates/main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_amd64.deb",
+      "version": "1:1.3.dfsg+really1.3.1-1+deb13u1"
+    }
+  ],
+  "provenance": {
+    "files": {
+      "provenance.log": "8c2d71198dfb3f4fd6726a32a737a2da0d48c5c458c3d75f75782184e1939d11",
+      "sqlite-InRelease": "7ea1bbff2245657eb1de74da54e1653b38c760c748fa9b33360c7c42fada47ef",
+      "sqlite-Packages.xz": "ee3a671a96bbd1ef5de8b7bec624543aeea812031d2479a4f8e658bb5dec0373",
+      "zlib-InRelease": "fa9db169adac7380297ee3cf1ba5f7741ffe6e7a2505f33bfb2b84b7003e8d6b",
+      "zlib-Packages.xz": "28134e15f9ebb915d78602983560490300472ba465b7dab33782a83655ec4573"
+    },
+    "method": "Debian signed InRelease to SHA256 Packages.xz to exact package stanza; independently verified 2026-11-07",
+    "signing_subkeys": [
+      "B8E5F13176D2A7A75220028078DBA3BC47EF2265",
+      "89C87ACEA5DD6B8E6A7068808E9F831205B4BA95"
+    ]
+  },
+  "scanner": {
+    "archive_sha256": "30a3d22b23f88c233f1658f562fb477cae3b3e8b4761109d515b7698daf85814",
+    "executable_sha256": "4aed5bde7c59636d3ef2564b9cf04d64cff8b15c8830f95568d2ac2a962bdc11",
+    "version": "0.71.0"
+  },
+  "status": "fixed"
+}
