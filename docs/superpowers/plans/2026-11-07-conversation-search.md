@@ -49,3 +49,28 @@ Run focused tests while iterating; once green run Flutter analyze and the full e
 ## Controller completion
 
 Preserve the independent research synthesis/citations and benchmark record in repo docs. Create reviewed additive migration recovery record required by `docs/releases/recovery/README.md`; independently review integration, security and deployment safety. Inspect a synthetic web preview. Run required local/release checks once per final change set; push exact source through current authorized protected CI route, deploy certified core/web with existing backup/health/rollback guards, verify public revision/health and read-only synthetic test-user flows. Do not claim deployed until observed. Report the actual outcome and material limits, then mark the active goal complete only when the requested feature is delivered.
+
+### Release maintenance: verified SQLite fixes
+
+CI exposed native security updates required by the existing release gate.
+The fixed official SQLite package still matches Debian 13 advisory records
+with no fixed-version threshold. Follow the binding supplemental spec
+`docs/superpowers/specs/2026-11-07-sqlite-security-adjudication.md`.
+
+1. Implement a strict native verifier and isolated raw/filtered Trivy scan,
+   backed by exact vendor package/library evidence and narrow OpenVEX `fixed`
+   statements. Test substitutions, unknown findings, malformed evidence and
+   scanner failures, then exercise real pinned Trivy.
+2. Bind the complete scan evidence through schema 4 of the signed release
+   manifest; enforce it at CI, relay and deployment. Preserve historical
+   validation explicitly and all existing production and recovery gates.
+3. Independently review both implementations and the installation transition.
+   Full CI must pass on the exact final candidate. Pause automation before
+   advancing main; install the reviewed executing copy through its existing
+   command, verify its archived bytes/imports, then relay and deploy using
+   the reviewed migration-270 procedure. No production changes before this.
+
+- [x] Security evidence helper, negative tests and real scanner proof
+- [x] Schema/CI/relay/deployment integration and regression tests
+- [ ] Independent security and executing-copy transition review
+- [ ] Exact full CI, certified deployment and live feature verification

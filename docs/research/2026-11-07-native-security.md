@@ -1,6 +1,6 @@
 # Native image security update — 2026-11-07
 
-**Deployment remains blocked.** The verified package update removes the two
+**Package-only baseline, before scanner adjudication.** The verified package update removes the two
 zlib findings and installs fixed SQLite bytes, but the unchanged Trivy 0.71.0
 CI gate still exits 1 with two HIGH SQLite findings. This document records a
 reviewable remediation, not a successful release or permission to bypass CI.
@@ -128,3 +128,41 @@ indexes, SBOM/license reports, failed scan JSON, tests and ledger roundtrip.
 No ignore entry, VEX statement, OS relabeling, metadata hiding or scan-policy
 change is part of this patch. Full CI and deployment remain blocked pending a
 separately reviewed resolution of the remaining scanner findings.
+
+## Subsequent isolated scanner audit
+
+The command above reproduced the existing CI behavior, including its
+`.trivyignore` file; it was not an unfiltered inventory of every finding.
+A subsequent Trivy run with modified findings exposed the existing,
+owner-approved ignore for
+[CVE-2026-119373](https://security-tracker.debian.org/tracker/CVE-2026-119373).
+Debian identifies the same `3.54.1-2` package as fixed for that issue too,
+with the upstream fix in 3.54.0. The new release check must isolate ambient
+configuration, preserve this third raw finding, and prove the same exact
+patched bytes before marking it fixed.
+
+The other existing ignore,
+[CVE-2026-119586](https://security-tracker.debian.org/tracker/CVE-2026-119586),
+concerns the command-line shell and remains undetermined in Debian's tracker.
+It is not asserted fixed or inherited as a waiver by the new check. An
+unresolved finding from the isolated scan still blocks release.
+
+The supplemental design is
+`docs/superpowers/specs/2026-11-07-sqlite-security-adjudication.md`; its schema-4
+evidence and executing-copy installation need their own tests and review.
+
+The implemented evidence helper subsequently passed a real isolated Trivy
+0.71.0 run: **3 raw HIGH findings, 3 exact fixed adjudications, 0 unresolved**.
+It used the exact committed core tree at `7f9752e8b2baa5f41e51763b5d0e272e6d2eed80`,
+image `sha256:25ff464042585517e877bd4a6b67f6bc189eeb43fff1287167ce7c1e5242c4cd`.
+Independent evidence recomputation and a second external image export/runtime
+probe also passed. This is component verification; the final combined source
+still requires full CI certification and normal deployment checks.
+
+The helper's negative tests cover changed hashes, package identities,
+findings, scanner settings, database evidence, policy, source and artifact
+identities. Schema-4 integration rejects rehashed substituted evidence or
+SBOMs and preserves recovery to the existing image. An independent review
+reran **302 focused tests** successfully. The scan envelope, raw/filtered
+reports, SBOM and logs are retained under
+`/tmp/klukai-exact-security-pass-20261107/`.
