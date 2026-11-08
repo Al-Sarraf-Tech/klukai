@@ -4,6 +4,7 @@
 !requirements.txt
 !requirements-build.txt
 !package_runtime.py
+!native-security-packages.json
 !healthcheck.py
 !seed_memories.py
 !app/

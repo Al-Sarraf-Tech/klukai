@@ -7,6 +7,14 @@ ARG DISTROLESS_IMAGE=gcr.io/distroless/base-debian13:nonroot@sha256:a0d70d6a97cd
 
 FROM ${DISTROLESS_IMAGE} AS runtime-base
 FROM ${PYTHON_IMAGE} AS builder
+# Debian 13 has no fixed SQLite package yet; use the ABI-compatible official
+# Debian sid binary, and the stable-security zlib update. Both archive hashes
+# were verified through signed InRelease -> Packages indexes. No apt resolver,
+# mutable repository state or transitive package upgrade enters this build.
+ADD --checksum=sha256:7789bf0b2338b781de388d83d7c473f9386c9ef638af110b5c1b3d1debb36f00 https://deb.debian.org/debian/pool/main/s/sqlite3/libsqlite3-0_3.54.1-2_amd64.deb /native-security/libsqlite3-0.deb
+ADD --checksum=sha256:8c27c342230503b73dfde629642c3b352e87b554e06d60cf58772f236a305ceb https://security.debian.org/debian-security/pool/updates/main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_amd64.deb /native-security/zlib1g.deb
+RUN --network=none test "$(dpkg --print-architecture)" = amd64 && \
+    dpkg -i /native-security/libsqlite3-0.deb /native-security/zlib1g.deb
 ARG SOURCE_DATE_EPOCH=0
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -18,7 +26,7 @@ COPY requirements-build.txt requirements.txt ./
 RUN python -m pip install --require-hashes -r requirements-build.txt && \
     python -m pip download --no-deps --no-build-isolation --require-hashes \
       --dest /downloads -r requirements.txt
-COPY package_runtime.py ./
+COPY package_runtime.py native-security-packages.json ./
 RUN --network=none python -m pip wheel --no-index --find-links=/downloads \
       --no-deps --no-build-isolation --require-hashes -r requirements.txt \
       --wheel-dir=/wheels && \
@@ -28,6 +36,10 @@ RUN --network=none python -m pip wheel --no-index --find-links=/downloads \
       --find-links=/wheels --no-deps --require-hashes --no-compile -r /runtime.lock
 COPY --from=runtime-base / /distroless-root/
 RUN --network=none python package_runtime.py runtime && \
+    dpkg-deb -x /native-security/zlib1g.deb /runtime && \
+    dpkg-query -s zlib1g > /runtime/var/lib/dpkg/status.d/zlib1g && \
+    cp /var/lib/dpkg/info/zlib1g:amd64.md5sums /runtime/var/lib/dpkg/status.d/zlib1g.md5sums && \
+    cp native-security-packages.json /runtime/usr/share/klukai-runtime/ && \
     cp /wheel-materials.json /runtime/usr/share/klukai-runtime/ && \
     cp /runtime.lock /runtime/usr/share/klukai-runtime/ && \
     mkdir -p /runtime/images /runtime/audio /runtime/home/appuser /runtime/app && \

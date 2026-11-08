@@ -9,7 +9,7 @@ import subprocess
 import pytest
 
 PROBE = r"""
-import asyncio,bcrypt,bz2,ctypes,gzip,importlib.util,io,json,lzma,os,pathlib,sqlite3,ssl,sys,uuid
+import asyncio,bcrypt,bz2,ctypes,gzip,hashlib,importlib.util,io,json,lzma,os,pathlib,sqlite3,ssl,sys,uuid
 import psycopg,uvloop,yaml
 from PIL import Image
 image=Image.new('RGB',(2,2),(12,34,56)); stream=io.BytesIO(); image.save(stream,format='PNG'); stream.seek(0)
@@ -34,7 +34,10 @@ assert all(name.startswith(('/opt/venv/','/opt/runtime-libs/','/usr/local/','/us
 print(json.dumps({'uid':os.getuid(),'python':sys.version_info[:2],
  'shells':[p for p in ['/bin/sh','/bin/bash','/busybox/sh','/bin/busybox'] if pathlib.Path(p).exists()],
  'installers':[p for p in ['pip','ensurepip'] if importlib.util.find_spec(p) is not None],
- 'native_runtime_passed':True,'native_dsos':dsos}))
+ 'native_runtime_passed':True,'native_dsos':dsos,'sqlite_version':sqlite3.sqlite_version,
+ 'security_dsos':{p:hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest() for p in dsos if 'libsqlite3.so' in p or '/libz.so' in p},
+ 'security_materials':json.loads(pathlib.Path('/usr/share/klukai-runtime/native-security-packages.json').read_text()) if pathlib.Path('/usr/share/klukai-runtime/native-security-packages.json').exists() else {},
+ 'security_package_status':{p:pathlib.Path('/var/lib/dpkg/status.d',p).read_text() for p in ('libsqlite3-0','zlib1g')}}))
 """
 
 HEALTHCHECK_PROBE = r"""
@@ -119,6 +122,35 @@ def test_candidate_retains_native_python_abi_and_data_libraries(candidate):
     assert data["python"] == [3, 14]
     assert data["native_runtime_passed"] is True
     assert data["uid"] not in (0, "root")
+
+
+def test_candidate_loads_verified_security_libraries(candidate):
+    _, data = candidate
+    assert data["sqlite_version"] == "3.54.1"
+    expected = {
+        "libsqlite3-0": (
+            "3.54.1-2",
+            "225ceb839db2c1dd484cfcaa5ef9fbdd429eb1d5f1e0c39fbd50150bca5fc7bc",
+        ),
+        "zlib1g": (
+            "1:1.3.dfsg+really1.3.1-1+deb13u1",
+            "6c13931760210e8b391b63a337dfe4071346c4ad6e3827694edb7b6989bb16dd",
+        ),
+    }
+    materials = data["security_materials"]["packages"]
+    assert {row["package"] for row in materials} == set(expected)
+    assert len(data["security_dsos"]) == 2
+    for row in materials:
+        version, binary_sha256 = expected[row["package"]]
+        assert row["version"] == version
+        assert (
+            f"\nVersion: {version}\n" in data["security_package_status"][row["package"]]
+        )
+        assert (
+            data["security_dsos"][row["runtime_library"]]
+            == binary_sha256
+            == row["library_sha256"]
+        )
 
 
 @pytest.mark.parametrize(

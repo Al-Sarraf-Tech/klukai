@@ -1,0 +1,22 @@
+{
+  "packages": [
+    {
+      "package": "libsqlite3-0",
+      "version": "3.54.1-2",
+      "architecture": "amd64",
+      "url": "https://deb.debian.org/debian/pool/main/s/sqlite3/libsqlite3-0_3.54.1-2_amd64.deb",
+      "sha256": "7789bf0b2338b781de388d83d7c473f9386c9ef638af110b5c1b3d1debb36f00",
+      "runtime_library": "/opt/runtime-libs/libsqlite3.so.0",
+      "library_sha256": "225ceb839db2c1dd484cfcaa5ef9fbdd429eb1d5f1e0c39fbd50150bca5fc7bc"
+    },
+    {
+      "package": "zlib1g",
+      "version": "1:1.3.dfsg+really1.3.1-1+deb13u1",
+      "architecture": "amd64",
+      "url": "https://security.debian.org/debian-security/pool/updates/main/z/zlib/zlib1g_1.3.dfsg+really1.3.1-1+deb13u1_amd64.deb",
+      "sha256": "8c27c342230503b73dfde629642c3b352e87b554e06d60cf58772f236a305ceb",
+      "runtime_library": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+      "library_sha256": "6c13931760210e8b391b63a337dfe4071346c4ad6e3827694edb7b6989bb16dd"
+    }
+  ]
+}
