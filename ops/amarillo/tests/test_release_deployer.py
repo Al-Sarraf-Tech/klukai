@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from unittest import mock
+from types import SimpleNamespace
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -490,6 +491,7 @@ class IndependentReviewTests(RolloutTests):
             directory = Path(tmp) / revision
             directory.mkdir()
             (directory / "manifest.json").write_text(json.dumps(manifest))
+            (directory / "image-security.json").write_text('{"fixture":"security"}')
             (directory / "provenance.json").write_text(
                 json.dumps(
                     {
@@ -501,6 +503,7 @@ class IndependentReviewTests(RolloutTests):
                 )
             )
             calls: list[list[str]] = []
+            native = mock.Mock(return_value={"native_verified": True})
 
             def fake_run(argv: list[str], **kwargs: object) -> str:
                 calls.append(argv)
@@ -508,6 +511,14 @@ class IndependentReviewTests(RolloutTests):
 
             def check(found: dict) -> dict:
                 with (
+                    mock.patch.dict(
+                        sys.modules,
+                        {
+                            "tools.ci.image_security": SimpleNamespace(
+                                verify_image=native
+                            )
+                        },
+                    ),
                     mock.patch.object(release, "verify_signature"),
                     mock.patch.object(release.release_artifact, "check_manifest"),
                     mock.patch.object(
@@ -524,11 +535,18 @@ class IndependentReviewTests(RolloutTests):
 
             good = {**manifest, "revision": revision}
             result = check(good)
+            native.assert_called_once_with(image_id, {"fixture": "security"}, manifest)
             self.assertEqual(result["image_id"], image_id)
             self.assertEqual(
                 result["tag"], f"klukai-core:verified-{revision[:7]}-{'d' * 12}"
             )
             self.assertIn(["docker", "tag", image_id, result["tag"]], calls)
+            calls.clear()
+            native.side_effect = ValueError("native bytes differ")
+            with self.assertRaisesRegex(ValueError, "native bytes"):
+                check(good)
+            self.assertFalse(any(call[:2] == ["docker", "tag"] for call in calls))
+            native.side_effect = None
             for name, value in (("config_sha256", "0" * 64), ("revision", "b" * 40)):
                 with self.assertRaises(release.ReleaseError):
                     check({**good, name: value})

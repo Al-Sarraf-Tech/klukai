@@ -40,6 +40,11 @@ The deployer is pull-based. A systemd user timer on amarillo
      job log:
      - `KLUKAI_RELEASE_MANIFEST_SHA256` for the image;
      - `KLUKAI_PWA_SHA256` for the PWA.
+   - Core candidates require schema 4 with exactly five signed provenance
+     materials, including `image-security.json`. The raw/filtered scan and
+     exact OpenVEX verdict are recomputed; loaded native bytes are checked
+     independently by immutable image ID at both relay and deployment. Schema 3
+     cannot downgrade a new candidate's security gate.
    - Every file is verified.
    - The PWA gets the deterministic content-hash transform
      (`tools/ci/web_release.py`).
@@ -251,11 +256,28 @@ journalctl --user -u klukai-deploy-on-merge -n 50 --no-pager
 ls ~/.local/state/klukai/release/deployer/receipts/
 ```
 
-To update the deployer's own code after a reviewed merge:
+To update the deployer's own code, pause automation **before merging the
+maintenance change to main**, confirm `status` shows no inflight transaction,
+and retain the previous executing pin plus running app/web/checkout recovery
+identities. Review the entire archived-code diff from that pin. After independent
+review and full CI on the exact final main revision, use the existing installed
+command as a separate maintenance step:
 
 ```sh
-python3 $D/klukai-deploy-on-merge.py install --revision <sha on main>
+python3 "$D/klukai-deploy-on-merge.py" install --revision <reviewed-final-main-sha>
 ```
+
+Verify the switched `current` archive, import paths and policy digest in a fresh
+process against the reviewed git objects. Exercise schema 4 acceptance and
+invalid/tampered evidence rejection using disposable fixtures before running the
+separately reviewed app rollout. The old schema 3-only pin deliberately cannot
+consume schema 4. Do not copy verifier files into the pinned tree or import the
+candidate checkout to bypass this transition. Installation changes executing
+code only; it does not replace application rollout, approval, migration recovery
+or backup checks. Keep production on its healthy revision if any check fails;
+restore the previous executing pin through the supported installer if necessary
+while no transaction is inflight. Resume automation only after successful live
+checks and a recorded outcome. See [release verifier maintenance](release.md#updating-the-executing-verifier-for-schema-4).
 
 ## Rollback
 

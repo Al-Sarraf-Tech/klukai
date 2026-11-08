@@ -490,7 +490,7 @@ def fetch_image(
         release_artifact.sha256(dest / "manifest.json") != manifest_sha256
     ):
         raise ValueError("Manifest differs from the digest the CI job logged")
-    for name in release_artifact.MATERIALS:
+    for name in release_artifact.materials_for_manifest(manifest):
         guest.read(f"{remote}/{name}", dest / name)
     materials = release_artifact.verify_materials(dest, manifest)
     guest.read(f"{remote}/core-image.tar", dest / "core-image.tar")

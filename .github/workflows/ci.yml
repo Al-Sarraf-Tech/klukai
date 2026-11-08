@@ -442,7 +442,7 @@ jobs:
           export PATH="$BIN:$PATH"
           trivy --version
           image="klukai-core:release-${GITHUB_SHA}"
-          M="${RUNNER_TEMP}/release-materials"; mkdir -p "$M"
+          M="$KLUKAI_CI_ARTIFACT_ROOT/$GITHUB_SHA/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/security-materials"; mkdir -p "$M"
           build() {
             docker build "$@" --build-arg VCS_REF="$GITHUB_SHA" \
               --label org.opencontainers.image.revision="$GITHUB_SHA" \
@@ -473,13 +473,17 @@ jobs:
             cat "$M/reproducibility.json"
             [ "$repro" -eq 0 ] || { echo "::error::the second build differs in content"; exit "$repro"; }
           fi
-          trivy image --severity HIGH,CRITICAL --exit-code 1 --no-progress "$image"
+          # A run-private frozen DB, raw findings and exact byte-bound OpenVEX
+          # adjudication are retained together. Scanner or proof failures block.
+          # The helper also writes the SBOM from that same inventory and DB.
+          python3 -m tools.ci.image_security scan --image "$image" \
+            --revision "$GITHUB_SHA" --source-tree "$(git rev-parse HEAD:docker/core)" \
+            --run "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" --output "$M/image-security.json"
           trivy image --scanners secret --exit-code 1 --no-progress "$image"
           trivy image --scanners license --format json --no-progress \
             --output "$M/licenses.json" "$image"
           python3 -m tools.ci.license_policy "$M/licenses.json" \
             --output "$M/license-verdict.json"
-          trivy image --format cyclonedx --no-progress --output "$M/sbom.cdx.json" "$image"
           {
             echo "KLUKAI_TOOL_TRIVY=$(trivy --version | head -1)"
             echo "KLUKAI_TOOL_DOCKER=$(docker version --format '{{.Server.Version}}')"
@@ -498,7 +502,7 @@ jobs:
           set -euo pipefail
           umask 077
           image="klukai-core:release-${GITHUB_SHA}"
-          M="${RUNNER_TEMP}/release-materials"
+          M="$KLUKAI_CI_ARTIFACT_ROOT/$GITHUB_SHA/$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT/security-materials"
           python3 -m tools.ci.release_artifact save --image "$image" \
             --revision "$GITHUB_SHA" --output "$RELEASE_DIR" \
             --run "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
@@ -508,6 +512,7 @@ jobs:
             --material "licenses.json=$M/licenses.json" \
             --material "license-verdict.json=$M/license-verdict.json" \
             --material "reproducibility.json=$M/reproducibility.json" \
+            --material "image-security.json=$M/image-security.json" \
             --tool "trivy=$KLUKAI_TOOL_TRIVY" --tool "docker=$KLUKAI_TOOL_DOCKER" \
             --tool "buildx=$KLUKAI_TOOL_BUILDX" --tool "python=$(python3 --version)"
           python3 -m tools.ci.docker_cache publish --record "$KLUKAI_CI_ARTIFACT_ROOT/cache/release.json" \
@@ -571,7 +576,7 @@ jobs:
           for manifest in "$KLUKAI_CI_ARTIFACT_ROOT/$base"/*/release/manifest.json; do
             [[ -f "$manifest" ]] || continue
             if python3 -m tools.ci.release_artifact verify --tar "$(dirname "$manifest")/core-image.tar" \
-                --manifest "$manifest" --revision "$base" --tag "klukai-core:perf-baseline-$GITHUB_RUN_ID"; then
+                --manifest "$manifest" --revision "$base" --tag "klukai-core:perf-baseline-$GITHUB_RUN_ID" --allow-legacy; then
               restored=1; break
             fi
           done

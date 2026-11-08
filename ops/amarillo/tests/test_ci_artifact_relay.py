@@ -11,6 +11,7 @@ import tempfile
 import unittest
 import pytest
 from unittest import mock
+from types import SimpleNamespace
 
 
 REPO = Path(__file__).resolve().parents[3]
@@ -24,6 +25,15 @@ from tools.ci import release_artifact  # noqa: E402
 
 REV = "c6d02f0c884cd4585aaab96c28a13c32bbb6fc6f"
 LAYER = "sha256:" + "a" * 64
+
+
+@pytest.fixture(autouse=True)
+def security_boundary(monkeypatch):
+    boundary = SimpleNamespace(
+        verify_evidence=mock.Mock(return_value={"adjudicated": 2})
+    )
+    monkeypatch.setitem(sys.modules, "tools.ci.image_security", boundary)
+    return boundary
 
 
 class FakeAgent:
@@ -71,6 +81,7 @@ def materials() -> dict[str, bytes]:
         "licenses.json": b'{"Results": []}',
         "license-verdict.json": b'{"passed": true, "findings": 1}',
         "reproducibility.json": b'{"identical": false, "content_identical": true}',
+        "image-security.json": b'{"fixture": "security"}',
     }
 
 
@@ -751,3 +762,34 @@ def test_a_required_job_field_cannot_be_missing(field):
 def test_incomplete_run_responses_fail_closed(response):
     with pytest.raises(ValueError):
         relay.green_run("o/r", REV, "tok", lambda *args: response)
+
+
+@pytest.mark.parametrize("fault", ["legacy", "missing", "tampered", "semantic"])
+def test_security_failure_cannot_transfer_image_or_sign(
+    tmp_path, security_boundary, fault
+):
+    base = f"/opt/klukai-ci/artifacts/{REV}/9-1/release"
+    files = release_files(base)
+    if fault == "legacy":
+        doc = json.loads(files[f"{base}/manifest.json"])
+        doc["schema"] = 3
+        del doc["materials"]["image-security.json"]
+        files[f"{base}/manifest.json"] = json.dumps(doc).encode()
+    elif fault == "missing":
+        del files[f"{base}/image-security.json"]
+    elif fault == "tampered":
+        files[f"{base}/image-security.json"] = b'{"passed":true}'
+    else:
+        security_boundary.verify_evidence.side_effect = ValueError(
+            "security evidence rejected"
+        )
+    agent = FakeAgent(files)
+    with (
+        mock.patch.object(relay, "sign") as sign,
+        pytest.raises((ValueError, RuntimeError)),
+    ):
+        relay.fetch_image(
+            relay.Guest(agent), "9-1", REV, tmp_path, key=tmp_path / "key"
+        )
+    assert f"{base}/core-image.tar" not in agent.reads
+    sign.assert_not_called()

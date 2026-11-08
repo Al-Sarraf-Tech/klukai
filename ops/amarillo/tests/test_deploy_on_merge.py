@@ -1350,3 +1350,69 @@ def test_a_green_run_hidden_from_the_success_search_still_certifies(env, monkeyp
     monkeypatch.setattr(dom.relay, "RUN_LOOKUP_PAUSE", 0)
     deployer.api = api
     assert deployer.certification(head) == {"state": "certified", "run": "5-1"}
+
+
+def test_schema4_candidate_failure_restores_legacy_snapshot_without_recertification(
+    env, monkeypatch
+):
+    from tools.ci import release_artifact
+
+    sha = env["remote"].commit({"docker/core/app.py": "schema4 candidate\n"})
+    certify(env, sha)
+    world, deployer = env["world"], env["deployer"]
+    world.web_result = "rolled_back"
+    verified = []
+    candidate = {
+        "schema": 4,
+        "revision": sha,
+        "source_tree": "b" * 40,
+        "layers": ["sha256:" + "c" * 64],
+        "config_sha256": "d" * 64,
+        "tar_sha256": "e" * 64,
+        "tools": {"trivy": "0.71.0"},
+        "materials": {
+            name: "f" * 64
+            for name in (
+                "sbom.cdx.json",
+                "licenses.json",
+                "license-verdict.json",
+                "reproducibility.json",
+                "image-security.json",
+            )
+        },
+    }
+    legacy = {
+        **candidate,
+        "schema": 3,
+        "revision": env["base"],
+        "materials": {
+            name: digest
+            for name, digest in candidate["materials"].items()
+            if name != "image-security.json"
+        },
+    }
+    with pytest.raises(ValueError):
+        release_artifact.check_manifest(legacy, env["base"])
+
+    def candidate_preflight(revision, *args, **kwargs):
+        # The current verifier is strict. A restore through this entry point
+        # would refuse the baseline, so it must use the captured immutable ID.
+        verified.append(revision)
+        release_artifact.check_manifest(
+            candidate if revision == sha else legacy, revision
+        )
+        return {"image_id": "sha256:" + sha + "0" * 24}
+
+    monkeypatch.setattr(dom.release, "verify_artifact", candidate_preflight)
+    deploy_core = deployer.deploy_core
+
+    def deploy_after_preflight(revision, accept, plans):
+        dom.release.verify_artifact(revision)
+        return deploy_core(revision, accept, plans)
+
+    monkeypatch.setattr(deployer, "deploy_core", deploy_after_preflight)
+    assert deployer.run_once()["status"] == "web_rolled_back"
+    assert verified == [sha]
+    assert world.image == OLD_IMAGE and world.pin == "klukai-core:old"
+    assert ("core-restore", "klukai-core:rollback-x", OLD_IMAGE) in world.calls
+    assert head_of(env["checkout"]) == env["base"]

@@ -1,7 +1,8 @@
 """Retain the exact CI-built core image and verify it before deployment.
 
 CI (`save`) writes `core-image.tar`, the provenance materials (CycloneDX SBOM,
-licence inventory and policy verdict, second-build reproducibility result) and
+licence inventory and policy verdict, second-build reproducibility result,
+strict raw/filtered security evidence and native proof) and
 `manifest.json` into the run's private artifact directory on the heavy guest.
 The manifest binds them to the revision, source tree, base images and tool
 versions. The deployment host (`verify`) checks the transferred tar against the
@@ -28,7 +29,7 @@ import tarfile
 from typing import Any
 
 LABEL = "org.opencontainers.image.revision"
-SCHEMA = 3
+SCHEMA = 4
 # Everything in the image configuration that changes how the container runs.
 RUNTIME_KEYS = (
     "Entrypoint",
@@ -44,12 +45,31 @@ RUNTIME_KEYS = (
     "Shell",
     "OnBuild",
 )
-MATERIALS = (
+LEGACY_MATERIALS = (
     "sbom.cdx.json",
     "licenses.json",
     "license-verdict.json",
     "reproducibility.json",
 )
+
+MATERIALS = (*LEGACY_MATERIALS, "image-security.json")
+
+
+def materials_for_manifest(
+    manifest: dict[str, Any], *, allow_legacy: bool = False
+) -> tuple[str, ...]:
+    """Choose an exact, closed material set; legacy is historical-only opt-in."""
+    schema = manifest.get("schema")
+    if type(schema) is not int or schema not in ((3, 4) if allow_legacy else (4,)):
+        raise ValueError("Release manifest schema is not accepted")
+    names = LEGACY_MATERIALS if schema == 3 else MATERIALS
+    if not isinstance(manifest.get("materials"), dict) or set(
+        manifest["materials"]
+    ) != set(names):
+        raise ValueError(
+            "Release manifest provenance material set is incomplete or unknown"
+        )
+    return names
 
 
 def _docker(*args: str, timeout: int = 600) -> str:
@@ -163,6 +183,19 @@ def save(
     if verdict.get("passed") is not True:
         raise ValueError("Licence policy did not pass")
     _require_reproducible(json.loads(materials["reproducibility.json"].read_text()))
+    from tools.ci.image_security import verify_evidence
+
+    verify_evidence(
+        json.loads(materials["image-security.json"].read_text()),
+        {
+            "revision": revision,
+            "source_tree": source_tree,
+            "run": run,
+            "layers": found["layers"],
+            "config_sha256": found["config_sha256"],
+            "materials": {"sbom.cdx.json": sha256(materials["sbom.cdx.json"])},
+        },
+    )
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
     recorded = {}
     for name in MATERIALS:
@@ -256,16 +289,17 @@ def _require_reproducible(result: dict[str, Any]) -> None:
         )
 
 
-def check_manifest(manifest: dict[str, Any], revision: str) -> None:
+def check_manifest(
+    manifest: dict[str, Any], revision: str, *, allow_legacy: bool = False
+) -> None:
+    materials_for_manifest(manifest, allow_legacy=allow_legacy)
     materials = manifest.get("materials")
     if (
-        manifest.get("schema") != SCHEMA
-        or manifest.get("revision") != _revision(revision)
+        manifest.get("revision") != _revision(revision)
         or not re.fullmatch(r"[0-9a-f]{64}", str(manifest.get("tar_sha256", "")))
         or not isinstance(manifest.get("layers"), list)
         or not manifest["layers"]
         or not isinstance(materials, dict)
-        or set(materials) != set(MATERIALS)
         or not all(re.fullmatch(r"[0-9a-f]{64}", str(v)) for v in materials.values())
         or not isinstance(manifest.get("tools"), dict)
         or not manifest["tools"]
@@ -275,10 +309,13 @@ def check_manifest(manifest: dict[str, Any], revision: str) -> None:
         raise ValueError("Release manifest is malformed or for another revision")
 
 
-def verify_materials(directory: Path, manifest: dict[str, Any]) -> dict[str, Any]:
-    """Every provenance file matches its manifest digest; the licence policy passed."""
-    for name, digest in manifest["materials"].items():
-        if sha256(directory / name) != digest:
+def verify_materials(
+    directory: Path, manifest: dict[str, Any], *, allow_legacy: bool = False
+) -> dict[str, Any]:
+    """Validate material digests, licence/rebuild gates and recomputed security."""
+    names = materials_for_manifest(manifest, allow_legacy=allow_legacy)
+    for name in names:
+        if sha256(directory / name) != manifest["materials"][name]:
             raise ValueError(f"Provenance material {name} differs from the manifest")
     verdict = json.loads((directory / "license-verdict.json").read_text())
     if verdict.get("passed") is not True:
@@ -288,7 +325,16 @@ def verify_materials(directory: Path, manifest: dict[str, Any]) -> dict[str, Any
         raise ValueError("SBOM is not a populated CycloneDX document")
     repro = manifest["reproducibility"]
     _require_reproducible(repro)
+    if manifest["schema"] == SCHEMA:
+        from tools.ci.image_security import verify_evidence
+
+        security = verify_evidence(
+            json.loads((directory / "image-security.json").read_text()), manifest
+        )
+    else:
+        security = {"legacy_schema": 3}
     return {
+        "image_security": security,
         "sbom_components": len(sbom["components"]),
         "licence_findings": verdict.get("findings"),
         "reproducible": repro.get("identical") is True,
@@ -296,9 +342,19 @@ def verify_materials(directory: Path, manifest: dict[str, Any]) -> dict[str, Any
     }
 
 
-def verify(tar: Path, manifest_path: Path, revision: str, tag: str) -> dict[str, Any]:
+def verify(
+    tar: Path,
+    manifest_path: Path,
+    revision: str,
+    tag: str,
+    *,
+    allow_legacy: bool = False,
+) -> dict[str, Any]:
     manifest = json.loads(manifest_path.read_text())
-    check_manifest(manifest, revision)
+    check_manifest(manifest, revision, allow_legacy=allow_legacy)
+    materials = verify_materials(
+        manifest_path.parent, manifest, allow_legacy=allow_legacy
+    )
     if sha256(tar) != manifest["tar_sha256"]:
         raise ValueError("Transferred image tar differs from the CI manifest")
     loaded = _docker("load", "--input", str(tar), timeout=900)
@@ -312,8 +368,20 @@ def verify(tar: Path, manifest_path: Path, revision: str, tag: str) -> dict[str,
         raise ValueError(
             "Loaded image runtime configuration differs from the CI manifest"
         )
-    _docker("tag", found["image_id"] or match.group(1), tag)
+    image_id = found["image_id"]
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(image_id)):
+        raise ValueError("Loaded image has no immutable image ID")
+    if manifest["schema"] == SCHEMA:
+        from tools.ci.image_security import verify_image
+
+        verify_image(
+            image_id,
+            json.loads((manifest_path.parent / "image-security.json").read_text()),
+            manifest,
+        )
+    _docker("tag", image_id, tag)
     return {
+        **materials,
         "tag": tag,
         "revision": revision,
         "layers": len(found["layers"]),
@@ -343,6 +411,11 @@ def main() -> int:
     v.add_argument("--manifest", type=Path, required=True)
     v.add_argument("--revision", required=True)
     v.add_argument("--tag", required=True)
+    v.add_argument(
+        "--allow-legacy",
+        action="store_true",
+        help="Historical schema 3 validation only",
+    )
     args = parser.parse_args()
     try:
         if args.command == "save":
@@ -364,7 +437,13 @@ def main() -> int:
             args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
             _require_reproducible(result)
         else:
-            result = verify(args.tar, args.manifest, args.revision, args.tag)
+            result = verify(
+                args.tar,
+                args.manifest,
+                args.revision,
+                args.tag,
+                allow_legacy=args.allow_legacy,
+            )
     except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
         print(f"release artifact refused: {error}", file=sys.stderr)
         return 1

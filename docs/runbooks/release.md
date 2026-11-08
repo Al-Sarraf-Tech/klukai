@@ -18,13 +18,27 @@ The `image-scan` job (`.github/workflows/ci.yml`) on the heavy runner:
   include timestamps), but any difference in file content, mode, owner or link
   fails the job, and the comparison is kept as evidence either way;
 - installs Trivy from its release tarball, checked against a pinned SHA-256;
-- blocks on HIGH/CRITICAL vulnerabilities and on secrets found in the image;
+- records a complete unsuppressed HIGH/CRITICAL vulnerability scan using a run-private frozen
+  Trivy database, then blocks unresolved HIGH/CRITICAL findings. The exact
+  reviewed SQLite exceptions use OpenVEX `fixed` only after the policy's
+  archive, package, architecture and independently exported library bytes
+  match. Unknown changes, missing evidence, scanner failures or expired new
+  adjudications fail closed. Raw and filtered reports (including modified
+  findings), OpenVEX, policy, scanner/database identities and native proof
+  remain together in `image-security.json`; this is an adjudicated scan, not
+  an unfiltered zero-finding claim;
+- independently blocks on secrets found in the image;
 - writes a CycloneDX SBOM and a licence inventory, and blocks unless the
-  inventory passes `tools/ci/license_policy.py` (policy below);
+  inventory passes `tools/ci/license_policy.py` (policy below). The SBOM uses
+  the same inventory and frozen database as the security evidence;
 - saves `core-image.tar`, those materials and `manifest.json` (revision, source
   tree, base images, tool versions, layer diff IDs, tar SHA-256, material
-  digests) under `/opt/klukai-ci/artifacts/<sha>/<run>-<attempt>/release`.
-  Tars are kept 7 days, manifests indefinitely.
+  digests). Schema 4 requires exactly the SBOM, licence inventory, licence
+  verdict, reproducibility result and `image-security.json` under
+  `/opt/klukai-ci/artifacts/<sha>/<run>-<attempt>/release`.
+  Tars are kept 7 days, manifests indefinitely. Scan diagnostics, including
+  failed scans, are retained separately in the run's `security-materials/`
+  directory; a failed adjudication never produces a release manifest.
 
 ## 2. Amarillo pulls, verifies and signs
 
@@ -41,7 +55,8 @@ deploy-on-merge always uses). The legacy Dominus path reads the files through th
 chunks. libvirt caps an agent reply at 10 MiB and virsh's RPC string at 4 MiB,
 and exceeding the first disables the agent channel. It then verifies the manifest,
 every material digest, the licence verdict, the tar hash, and the loaded image's
-layers, revision label and runtime configuration digest, and tags
+layers, revision label and runtime configuration digest, independently checks
+the actual loaded native bytes by immutable image ID, and tags
 `klukai-core:ci-<sha7>`. Only after all of that passes does it write
 `provenance.json` (CI run, manifest digest, layers, configuration digest,
 materials, verification result) and sign it with the amarillo release key
@@ -68,14 +83,17 @@ Staged preflight, any failure refuses before production changes:
 
 1. **Artifact:** the signature verifies against the committed signer, the
    provenance binds the manifest by digest, the materials and licence verdict
-   check out (including content-identical second build), and the image the
+   check out (including content-identical second build and recomputed security
+   adjudication under the installed reviewed policy), and the image the
    local tag resolves to has exactly the manifest's layers, revision and
    runtime configuration digest. The configuration digest covers entrypoint,
    command, environment, user, working directory, ports, volumes, labels, stop
    signal, health check and platform, with unset keys dropped so the CI guest's
    containerd store and amarillo's classic store agree. The deployer resolves
    the tag once and from then on uses only that image ID, pinned as the
-   immutable tag `klukai-core:verified-<sha7>-<id12>`.
+   immutable tag `klukai-core:verified-<sha7>-<id12>`. Before tagging, deployment
+   independently exports and checks the loaded artifact's native bytes again.
+   A signed `passed` flag cannot substitute for either boundary's checks.
 2. **Source:** the main checkout is at the release commit and
    `docker-compose.yml` is unmodified.
 3. **Rollback safety:** a rollback restores only the image. Core applies
@@ -145,3 +163,47 @@ GPL/LGPL family, licences reviewed per package (MPL-2.0 for ca-certificates,
 certifi, hypothesis, py-vapid and pywebpush) and reviewed unclassified notices.
 Any other copyleft or unreviewed licence fails CI until it is reviewed and
 listed.
+
+## Updating the executing verifier for schema 4
+
+The pinned schema 3 deployer refuses schema 4 artifacts until its own executing
+copy is deliberately updated. This is separate operator maintenance, before
+application rollout. Review the complete archived-code diff from the installed
+pin to the final main revision, including the verifier and exact local policy.
+Keep protected-path, PR approval and migration recovery requirements unchanged;
+standing delivery authorization does not fabricate an approval event.
+
+Pause automation **before the maintenance change reaches main**, and verify no
+transaction is inflight. Retain the previous executing pin and running immutable
+image/web/checkout/recovery identities. After independent review and full CI for
+the exact final main SHA, use the existing pinned install command:
+
+```sh
+D=~/.local/share/klukai/deployer/current/ops/amarillo/scripts
+python3 "$D/klukai-deploy-on-merge.py" pause
+python3 "$D/klukai-deploy-on-merge.py" status  # require no inflight transaction
+python3 "$D/klukai-deploy-on-merge.py" install --revision <reviewed-final-main-sha>
+```
+
+The normal installer preserves main ancestry checks and switches `current`
+atomically. Do not copy files into its pinned tree, import from the candidate
+checkout or monkeypatch a running process. In a fresh process, verify the new
+`current` target, archived files against the reviewed git objects, actual import
+paths, installed policy digest, valid schema 4 acceptance and invalid/tampered
+evidence rejection using disposable fixtures. Installation alone does not roll
+out the app. Then execute the separately reviewed manual rollout/recovery
+procedure with signature, certification, backup, migration, readiness, hold and
+5xx gates intact. Resume automation only after live verification and a recorded
+outcome. If maintenance fails before rollout, production stays on its healthy
+revision; restore the old executing pin through the supported installer while
+no transaction is inflight.
+
+Production relay and deployment accept only schema 4. Schema 3 is available
+only through explicit `--allow-legacy` for historical artifact validation and
+perf baselines; the perf candidate remains strict. Automatic rollback restores
+the retained immutable old image and pin directly, so crossing back to a
+schema 3-era image never requires weakening the new-candidate verifier. Policy
+expiry blocks new adjudications after expiry; previously issued evidence is
+checked against its issuance interval and the exact installed policy, keeping
+historical verification possible. A policy change requires reviewed executing
+verifier maintenance, never trusting an envelope's copied policy implicitly.

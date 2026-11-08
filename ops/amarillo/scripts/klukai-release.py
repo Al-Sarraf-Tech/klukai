@@ -157,6 +157,11 @@ def verify_artifact(
         or found.get("config_sha256") != manifest.get("config_sha256")
     ):
         raise ReleaseError("local image differs from the signed CI manifest")
+    from tools.ci.image_security import verify_image
+
+    verify_image(
+        image_id, json.loads((directory / "image-security.json").read_text()), manifest
+    )
     tag = f"klukai-core:verified-{revision[:7]}-{image_id[7:19]}"
     run(["docker", "tag", image_id, tag])
     return {
