@@ -12,6 +12,13 @@ in `docs/superpowers/plans/`.
 
 ## [Unreleased]
 
+### Removed
+
+- The host PR reviewer is gone. `klukai-pr-reviewer` ran Claude Opus 5.5 at
+  xhigh on the production Anthropic key every five minutes. The timer is
+  already stopped on amarillo. Deploy-on-merge still requires the owner's
+  human approval.
+
 ### Fixed
 
 - A picture of something he asked to see now has it in the picture. "show me your bike" drew her at the tea counter with no bike and passed the check: the phrase list only knew "on your bike", so her schedule picked the place, and the checker only rejected what contradicted the request. "your bike", "the bike" and "a bike" now put her on the road with it, and a picture missing the thing the request's first line asks to see is redrawn.
