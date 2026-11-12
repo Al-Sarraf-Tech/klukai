@@ -169,6 +169,8 @@ def test_the_deployer_token_is_a_known_but_optional_credential():
     assert "deployer-github-token" in klukai_secrets.NAMES
     assert "deployer-github-token" in klukai_secrets.OPTIONAL_NAMES
     assert "deployer-github-token" not in klukai_secrets.COMPOSE_NAMES
+    assert "reviewer-github-token" not in klukai_secrets.NAMES
+    assert "reviewer-github-token" not in klukai_secrets.OPTIONAL_NAMES
 
 
 def test_production_target_refuses_a_checkout_without_compose(tmp_path, monkeypatch):

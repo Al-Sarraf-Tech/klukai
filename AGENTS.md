@@ -168,9 +168,7 @@ The summary is `SMOKE PASS` or `SMOKE FAIL`. It does not print credentials.
 The login at `GROK_AUTH_PATH` has to still be valid (`grok login` on the host
 if `grok models` says it is not). The unit environment above has to be the
 one the service process actually has; a shell without those variables fails
-closed. The PR reviewer (`ops/amarillo/scripts/klukai-pr-reviewer.py`) is
-still Claude Opus 5.5 at xhigh effort on the Anthropic API. That is an
-operator tool, not her chat, pictures, or background text.
+closed.
 
 ## Klukai's pictures: Seedream 4.5 on fal (owner decisions, 2026-10-23)
 
