@@ -152,6 +152,14 @@ _SHOW_PICTURE = re.compile(
     r"^(?:show (?:me|us)|let me see|can i see|could i see|"
     r"i (?:want|would like) to see|i'd like to see) " + _VISUAL_TARGET
 )
+# "Show me where you are" is a picture of her right now, never a prose answer.
+_SHOW_NOW = re.compile(
+    r"^(?:(?:show|let)\s+(?:me|us)(?:\s+see)?|send\s+(?:me|us))\s+"
+    r"(?:where you are|where you're at|what you(?:'re| are) (?:doing|up to|wearing)"
+    r"(?: right now| now)?|what(?:'s| is) (?:going on|happening)(?: (?:right )?now)?)"
+    r"(?:\s+(?:right )?now)?(?:,? please)?[.!?]*$"
+)
+_CLAUSE_SPLIT = re.compile(r"[?.!;—–]\s+|\s+-\s+|,\s+")
 _PICTURE_FOLLOWUP = re.compile(
     r"^(?:how about |what about |i (?:want|would like) |i'd like |"
     r"(?:can|could) i have )" + _PICTURE_ARTICLE + _PICTURE_NOUN + r"\b|"
@@ -181,6 +189,11 @@ def needs_image(message: str) -> bool:
         or _NON_PICTURE_ACTION.match(request)
     ):
         return False
+    if _SHOW_NOW.match(request) or any(
+        _SHOW_NOW.match(_REQUEST_PREFIX.sub("", clause, count=1))
+        for clause in _CLAUSE_SPLIT.split(request)[1:]
+    ):
+        return True
     return any(
         pattern.match(request) is not None
         for pattern in (

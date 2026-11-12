@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 
 
+from .picture_denial import neutralise_denials
 from . import context
 from .agent_loop import AgentLoop
 from .background import (
@@ -369,6 +370,10 @@ async def _handle_message(
         if not any((t.get("content") or "").strip() for t in live[:-1]):
             earlier = await load_recent_thread(user_id)
         messages.extend(stitch_continuity(live, earlier))
+        if await picture_decision is not None:
+            # A stale "no picture" turn must not talk her out of the picture
+            # that is being drawn now (prompt copy only; storage is untouched).
+            messages = neutralise_denials(messages)
 
         reply_runtime = ChatReplyRuntime(
             router,

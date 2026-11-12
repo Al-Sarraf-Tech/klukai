@@ -315,7 +315,7 @@ class TestWhatSheIsToldEachTurn:
         prompt, ns = await self._prompt(
             "draw yourself", monkeypatch, needs_image_val=True
         )
-        assert "being drawn for this request" in prompt
+        assert "being drawn for him right now" in prompt
         assert "has not arrived yet" in prompt
         assert "Already done" not in prompt
         assert "No picture is being drawn" not in prompt

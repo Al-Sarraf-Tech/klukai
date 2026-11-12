@@ -21,23 +21,28 @@ from .personality import (
     build_inside_jokes_block,
     build_thread_block,
 )
+from .picture_denial import without_denied_exchanges, without_refusal_references
 from .proactive import ProactiveEngine
 from .ws_manager import WSManager
 
 logger = logging.getLogger(__name__)
 
 PICTURE_UNDERWAY = (
-    "\n\nIMAGE GENERATION ACTIVE: A picture is being drawn for this request right now. "
-    "It arrives on its own in about a minute and has not arrived yet. "
-    "Keep your text response to 1 SHORT sentence acknowledging the request, in your own "
-    "voice. Never say it is done, sent or already there. "
+    "\n\nIMAGE GENERATION ACTIVE: He asked for a picture and it is being drawn for him "
+    "right now by the system, a picture of what is happening for you at this moment: "
+    "where you are, what you have on and what you are doing. It arrives on its own in "
+    "about a minute and has not arrived yet. Keep your text response to 1 SHORT sentence "
+    "saying you are taking it for him now, in your own voice. You do have the means to "
+    "send it. Never refuse, never say you have no image tool, cannot send one, or that "
+    "pictures are down, and ignore any earlier turn that said so. Never say it is done, "
+    "sent or already there. If the drawing fails he is told separately after the attempt. "
     "Do NOT narrate the process of taking a photo, using a data pad, or activating a camera."
 )
 PICTURE_NOT_UNDERWAY = (
     "\n\nPICTURES: You can draw and send him pictures. When he asks for one, it is drawn "
     "and arrives on its own. No picture is being drawn this turn, so never say one is "
     "coming, done or sent. If he asks whether you can draw, say yes and ask what he wants "
-    "to see. Never say you can't draw."
+    "to see. Never say you can't draw or that you have no image tool."
 )
 
 
@@ -215,7 +220,7 @@ class ChatPromptBuilder:
             mood=session.mood,
             memories=episode_memories,
             relationship_facts=rel_facts,
-            recalled_exchanges=recalled_exchanges,
+            recalled_exchanges=without_denied_exchanges(recalled_exchanges),
             tools_available=True,
             affection_score=aff_state.score,
             affection_level=aff_state.level,
@@ -478,7 +483,7 @@ class ChatPromptBuilder:
         _jk_cfg = _p.get("inside_jokes", {})
         if _jk_cfg.get("enabled", True):
             jokes_block = build_inside_jokes_block(
-                inside_jokes,
+                without_refusal_references(inside_jokes),
                 aff_state.level,
                 max_surfaced=_jk_cfg.get("max_surfaced", 2),
                 min_affection_level=_jk_cfg.get("min_affection_level", 3),

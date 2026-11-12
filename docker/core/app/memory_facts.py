@@ -5,6 +5,7 @@ from typing import Any
 import logging
 from datetime import timezone
 from . import fact_store
+from .picture_denial import refusal_reference
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +93,8 @@ class MemoryFactsMixin:
         natural recency signal."""
         if not label or not label.strip() or not note or not note.strip():
             return
+        if refusal_reference(label, note):
+            return  # a running joke must never teach her to refuse a picture
         slug = self._joke_slug(label)
         await self.store_fact(
             f"rel:joke:{slug}", f"{label.strip()} :: {note.strip()}", user_id=user_id
