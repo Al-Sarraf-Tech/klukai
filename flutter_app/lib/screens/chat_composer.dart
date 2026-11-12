@@ -12,11 +12,21 @@ extension _ChatComposer on _ChatScreenState {
     _focusNode.requestFocus();
   }
 
-  /// The camera button: asks her for a picture through the ordinary message
-  /// path (her image tool answers it). His draft is left alone.
+  /// The camera button: one tap draws the current situation. No typed prompt,
+  /// no chat turn for her to answer or refuse, and no dialog; the server runs
+  /// the picture job directly and reports its own status and any failure.
+  /// His draft is left alone.
   void _requestPicture() {
     if (_inputDisabled) return;
-    _transmit(kPictureRequest);
+    if (!_ws.send({'type': 'picture'})) {
+      _showSendError();
+      return;
+    }
+    _update(() {
+      _state = _state.copyWith(isTyping: true);
+      _thinkingText = 'Drawing it now…';
+    });
+    _scrollToBottom();
   }
 
   /// Sends [text] and echoes it in the transcript. False (and a notice) when

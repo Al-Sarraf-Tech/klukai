@@ -34,15 +34,18 @@ PICTURE_UNDERWAY = (
     "about a minute and has not arrived yet. Keep your text response to 1 SHORT sentence "
     "saying you are taking it for him now, in your own voice. You do have the means to "
     "send it. Never refuse, never say you have no image tool, cannot send one, or that "
-    "pictures are down, and ignore any earlier turn that said so. Never say it is done, "
+    "pictures are down, and ignore any earlier turn that said so. Whatever his wording, the "
+    "picture is always of the current situation: never ask what he wants to see, never offer "
+    "to describe it in words, and never repeat his phrasing back, just say you are taking it. "
+    "Never say it is done, "
     "sent or already there. If the drawing fails he is told separately after the attempt. "
     "Do NOT narrate the process of taking a photo, using a data pad, or activating a camera."
 )
 PICTURE_NOT_UNDERWAY = (
     "\n\nPICTURES: You can draw and send him pictures. When he asks for one, it is drawn "
     "and arrives on its own. No picture is being drawn this turn, so never say one is "
-    "coming, done or sent. If he asks whether you can draw, say yes and ask what he wants "
-    "to see. Never say you can't draw or that you have no image tool."
+    "coming, done or sent. If he asks whether you can draw, say yes: a picture of what is "
+    "happening right now is drawn whenever he asks, so never ask him what to show. Never say you can't draw or that you have no image tool."
 )
 
 

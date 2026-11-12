@@ -5,8 +5,6 @@ import '../theme/hud.dart';
 
 /// What the picture button sends: an ordinary chat line, in his words, that
 /// her image tool recognizes ("take a picture", "show me").
-const kPictureRequest = 'Take a picture for me — show me where you are.';
-
 /// The HUD composer: ask for a picture, `> TRANSMIT…`, her voice language
 /// (EN | JP) and SEND. Shared by the chat view and the 3D view.
 ///

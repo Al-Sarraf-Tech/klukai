@@ -159,6 +159,9 @@ _SHOW_NOW = re.compile(
     r"(?: right now| now)?|what(?:'s| is) (?:going on|happening)(?: (?:right )?now)?)"
     r"(?:\s+(?:right )?now)?(?:,? please)?[.!?]*$"
 )
+_BARE_PLEASE = re.compile(
+    r"^(?:(?:an?|one) )?(?:pictures?|pics?|photos?|selfies?|images?),? please[.!?]*$"
+)
 _CLAUSE_SPLIT = re.compile(r"[?.!;—–]\s+|\s+-\s+|,\s+")
 _PICTURE_FOLLOWUP = re.compile(
     r"^(?:how about |what about |i (?:want|would like) |i'd like |"
@@ -189,9 +192,13 @@ def needs_image(message: str) -> bool:
         or _NON_PICTURE_ACTION.match(request)
     ):
         return False
-    if _SHOW_NOW.match(request) or any(
-        _SHOW_NOW.match(_REQUEST_PREFIX.sub("", clause, count=1))
-        for clause in _CLAUSE_SPLIT.split(request)[1:]
+    if (
+        _BARE_PLEASE.match(request)
+        or _SHOW_NOW.match(request)
+        or any(
+            _SHOW_NOW.match(_REQUEST_PREFIX.sub("", clause, count=1))
+            for clause in _CLAUSE_SPLIT.split(request)[1:]
+        )
     ):
         return True
     return any(

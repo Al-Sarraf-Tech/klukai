@@ -142,3 +142,40 @@ def test_the_still_no_picture_running_joke_is_a_refusal_reference():
         {"assistant_content": "Roses are in bloom."},
     ]
     assert without_denied_exchanges(rows) == [rows[1]]
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["take a picture", "Take a picture for me.", "send me a pic", "picture please"],
+)
+def test_a_bare_request_is_admitted(text):
+    assert explicit_picture_request(text)
+
+
+@pytest.mark.parametrize("text", ["take a picture", "send me a pic"])
+async def test_bare_request_gets_a_short_acknowledgement_prompt_and_a_picture(text):
+    from unittest.mock import patch
+
+    from app.chat_handlers import _handle_message
+    from app.image_prompts import needs_image
+    from tests.test_chat_handlers_coverage import (
+        _drain_tasks,
+        _fresh_session,
+        _patched_pipeline,
+    )
+
+    captured = {}
+
+    async def stream(system_prompt, messages, config):
+        captured["prompt"] = system_prompt
+        yield "Taking it now."
+
+    with _patched_pipeline() as ns:
+        ns.router.stream = stream
+        with patch("app.chat_handlers.needs_image", needs_image):
+            await _handle_message(text, _fresh_session())
+            await _drain_tasks()
+    ns.background_image_gen.assert_awaited_once()
+    for need in ("current situation", "never ask what he wants to see", "1 SHORT"):
+        assert need in captured["prompt"]
+    assert "show me where you are" not in captured["prompt"]

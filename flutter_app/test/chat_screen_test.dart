@@ -2718,22 +2718,40 @@ void main() {
       fake.dispose();
     });
 
-    testWidgets('the picture button asks for one and leaves his draft alone', (
+    testWidgets(
+      'one tap on the camera draws the picture and leaves his draft',
+      (tester) async {
+        final fake = await _pumpChat(tester);
+        await tester.enterText(find.byType(TextField), 'half-typed thought');
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('composer-picture')));
+        await tester.pump();
+
+        // A direct picture frame: no typed prompt, no chat message to refuse.
+        expect(fake.sent.last, {'type': 'picture'});
+        expect(fake.sent.where((f) => f['type'] == 'message'), isEmpty);
+        expect(find.textContaining('show me where you are'), findsNothing);
+        // The status shows at once, with no dialog, menu or confirm step.
+        expect(find.text('DRAWING IT NOW…'), findsWidgets);
+        expect(find.byType(Dialog), findsNothing);
+        expect(find.byType(AlertDialog), findsNothing);
+        expect(find.byType(BottomSheet), findsNothing);
+        expect(
+          tester.widget<TextField>(find.byType(TextField)).controller!.text,
+          'half-typed thought',
+        );
+        fake.dispose();
+      },
+    );
+
+    testWidgets('a dead link says so instead of showing a picture underway', (
       tester,
     ) async {
       final fake = await _pumpChat(tester);
-      await tester.enterText(find.byType(TextField), 'half-typed thought');
-      await tester.pump();
+      fake.sendShouldSucceed = false;
       await tester.tap(find.byKey(const Key('composer-picture')));
       await tester.pump();
-
-      expect(fake.sent.last['type'], 'message');
-      expect(fake.sent.last['content'], kPictureRequest);
-      expect(find.text(kPictureRequest), findsOneWidget);
-      expect(
-        tester.widget<TextField>(find.byType(TextField)).controller!.text,
-        'half-typed thought',
-      );
+      expect(find.text('DRAWING IT NOW…'), findsNothing);
       fake.dispose();
     });
 

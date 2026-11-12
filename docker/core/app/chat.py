@@ -362,6 +362,10 @@ async def _dispatch_device_frame(
             except Exception as exc:
                 logger.debug("Could not show typing: %s", exc)
             await _admit_turn("message", content, user_id, websocket)
+        elif msg_type == "picture":
+            from .picture_tap import handle_picture_tap
+
+            await handle_picture_tap(user_id, websocket)
         elif msg_type == "typing":
             pass
         elif msg_type == "voice_end":
