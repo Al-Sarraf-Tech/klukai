@@ -17,6 +17,9 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
     - AMD `k10temp` sensor, starting guests below 80 C and pausing them at 90 C
       (a 7950X runs up to 95 C by design; amarillo keeps 62/68 C);
     - the owner's GitHub CLI login, read in memory.
+    - `steal_from: amarillo` with `steal_exclude_kinds: ["heavy"]` (owner, 2026-11-19): a
+      `klukai-amarillo-*` job amarillo has not taken within `STEAL_AFTER_SECONDS` runs on Dominus,
+      except the heavy kind (Perf Gate, nightly perf, release), which stays on amarillo's calibrated host.
 - **Heartbeat.** While Dominus is healthy, not gaming (no new guests while
   `/run/user/1000/dominus-gpu/game-active` exists) and outside 23:00-08:00,
   its controller writes the repository variable `KLUKAI_CI_DOMINUS_HEARTBEAT`

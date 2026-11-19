@@ -291,7 +291,7 @@ def configure(doc: dict[str, Any]) -> None:
              "artifacts", "temp_sensor", "token_source", "heartbeat_variable",
              "gaming_marker", "quiet_hours", "record_days",
              "start_below_c", "pause_at_c", "resume_below_c",
-             "memory_headroom_mib", "max_memory_pressure"}
+             "memory_headroom_mib", "max_memory_pressure", "steal_exclude_kinds"}
     if set(doc) - known:
         raise RunnerError(f"unknown host settings: {sorted(set(doc) - known)}")
     pool = doc.get("pool", POOL)
@@ -321,6 +321,13 @@ def configure(doc: dict[str, Any]) -> None:
     POOL, STEAL_FROM, SLOTS, SUBNET = pool, steal, slots, subnet
     PROFILES = make_profiles(POOL)
     STEAL_PROFILES = make_profiles(STEAL_FROM) if STEAL_FROM and STEAL_FROM != POOL else {}
+    # Owner, 2026-11-19: dominus takes over amarillo's Klukai jobs, but never a kind listed here. "heavy"
+    # carries Perf Gate and the nightly perf run, which stay on amarillo's calibrated host; a stolen heavy
+    # runner could be handed any queued heavy job, so the whole kind is excluded.
+    excluded = set(doc.get("steal_exclude_kinds", []))
+    if excluded - set(KINDS):
+        raise RunnerError("steal_exclude_kinds must name profile kinds")
+    STEAL_PROFILES = {k: v for k, v in STEAL_PROFILES.items() if v.kind not in excluded}
     MAX_VCPUS = int(doc.get("max_vcpus", MAX_VCPUS))
     memory = doc.get("max_memory_mib", MAX_MEMORY_MIB)
     MAX_MEMORY_MIB = int(memory) if memory is not None else None

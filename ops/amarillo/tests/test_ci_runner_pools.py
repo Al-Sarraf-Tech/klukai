@@ -226,3 +226,23 @@ def test_old_records_are_pruned_and_the_cache_and_fresh_runs_kept(tmp_path):
         os.utime(path, (now - 3600, now - 3600))
     assert runner.prune_records(tmp_path, days=2, now=now) == 1
     assert not (tmp_path / ("a" * 40)).exists() and new.exists() and cache.exists()
+
+
+def test_dominus_takes_over_amarillo_jobs_except_the_excluded_perf_kind():
+    """Owner, 2026-11-19: Dominus steals amarillo's Klukai jobs, but heavy (Perf Gate, nightly perf) stays put."""
+    runner = fresh()
+    runner.configure({**DOMINUS, "steal_from": "amarillo", "steal_exclude_kinds": ["heavy"]})
+    assert set(runner.STEAL_PROFILES) == {
+        f"klukai-amarillo-{k}" for k in runner.KINDS if k != "heavy"}
+    assert "klukai-amarillo-heavy" not in runner.STEAL_PROFILES
+    with pytest.raises(runner.RunnerError):
+        runner.configure({**DOMINUS, "steal_from": "amarillo", "steal_exclude_kinds": ["perf"]})
+
+
+def test_the_committed_dominus_host_config_keeps_perf_on_amarillo():
+    import json
+    doc = json.loads((REPO / "ops/dominus-nobara/ci-runner/host.json").read_text())
+    runner = fresh()
+    runner.configure(doc)
+    assert runner.STEAL_FROM == "amarillo"
+    assert all(p.kind != "heavy" for p in runner.STEAL_PROFILES.values())
