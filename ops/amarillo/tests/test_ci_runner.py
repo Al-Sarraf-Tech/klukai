@@ -753,3 +753,177 @@ def test_the_perf_vm_still_runs_alone(env):
     github.jobs = [job("klukai-amarillo-small", "2026-10-22T10:02:00Z")]
     controller.tick()
     assert [g.profile.label for g in controller.guests.values()] == ["klukai-amarillo-heavy"]
+
+
+# ── GitHub API budget (owner, 2026-11-19) ─────────────────────────────────
+
+
+class _Response:
+    def __init__(self, body: bytes, headers: dict, status: int = 200):
+        self._body, self.headers, self.status = body, headers, status
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _http_error(code: int, headers: dict):
+    import email.message
+    import urllib.error
+
+    message = email.message.Message()
+    for key, value in headers.items():
+        message[key] = value
+    return urllib.error.HTTPError("https://api.github.com/x", code, "x", message, None)
+
+
+def test_gets_are_conditional_and_a_304_returns_the_cached_body():
+    sent = []
+
+    def opener(request, timeout):
+        sent.append(dict(request.header_items()))
+        if len(sent) == 1:
+            return _Response(b'{"workflow_runs": [1]}', {"ETag": '"v1"', "X-RateLimit-Remaining": "4000"})
+        raise _http_error(304, {"X-RateLimit-Remaining": "4000"})
+
+    github = runner.GitHub("test-only-token", opener=opener, clock=lambda: 1000.0)
+    assert github.call("GET", "/repos/x/actions/runs?status=queued") == {"workflow_runs": [1]}
+    assert github.call("GET", "/repos/x/actions/runs?status=queued") == {"workflow_runs": [1]}
+    assert "If-none-match" not in sent[0] and sent[1]["If-none-match"] == '"v1"'
+
+
+def test_writes_are_never_conditional():
+    sent = []
+
+    def opener(request, timeout):
+        sent.append(dict(request.header_items()))
+        return _Response(b"{}", {"ETag": '"w"'})
+
+    github = runner.GitHub("test-only-token", opener=opener, clock=lambda: 1000.0)
+    github.call("POST", "/x", {"a": 1})
+    github.call("POST", "/x", {"a": 1})
+    assert all("If-none-match" not in headers for headers in sent)
+
+
+def test_a_low_remaining_budget_pauses_every_call_until_the_reset():
+    now = {"t": 1000.0}
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request.full_url)
+        return _Response(b"{}", {"X-RateLimit-Remaining": "12", "X-RateLimit-Reset": "1300"})
+
+    github = runner.GitHub("test-only-token", opener=opener, clock=lambda: now["t"])
+    github.call("GET", "/a")
+    assert github.paused_until == 1305
+    with pytest.raises(runner.RunnerError, match="paused for the rate limit"):
+        github.call("GET", "/b")
+    assert len(calls) == 1
+    now["t"] = 1306.0
+    github.call("GET", "/b")
+    assert len(calls) == 2
+
+
+def test_a_spent_budget_403_pauses_too():
+    def opener(request, timeout):
+        raise _http_error(403, {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "2000"})
+
+    github = runner.GitHub("test-only-token", opener=opener, clock=lambda: 1000.0)
+    with pytest.raises(runner.RunnerError, match="HTTP 403"):
+        github.call("GET", "/a")
+    assert github.paused_until == 2005
+
+
+def test_finished_runs_leave_the_cache():
+    github = runner.GitHub("test-only-token", clock=lambda: 1000.0)
+    prefix = f"/repos/{runner.REPO}/actions/runs/"
+    github._etags = {prefix + "1/jobs?filter=latest&per_page=100": ("e", {}),
+                     prefix + "2/jobs?filter=latest&per_page=100": ("e", {}),
+                     f"/repos/{runner.REPO}/actions/runs?status=queued&per_page=30": ("e", {})}
+    github.forget(prefix, {prefix + "2/jobs?filter=latest&per_page=100"})
+    assert set(github._etags) == {prefix + "2/jobs?filter=latest&per_page=100",
+                                  f"/repos/{runner.REPO}/actions/runs?status=queued&per_page=30"}
+
+
+def test_a_refused_delete_is_retried_with_growing_waits(env):
+    make, state, _ = env
+    controller, github, host = make([job("klukai-amarillo-small")])
+    controller.tick()
+    assert len(controller.guests) == 1
+    refusals = {"left": 2}
+    tries = []
+
+    def delete(runner_id):
+        tries.append(state["now"])
+        if refusals["left"]:
+            refusals["left"] -= 1
+            raise runner.RunnerError("GitHub DELETE /runners: HTTP 422")
+        github.deleted.append(runner_id)
+
+    github.delete_runner = delete
+    github.jobs = []
+    host.domains.clear()  # the guest powered off after its job
+    controller.tick()
+    assert controller.guests == {} and 100 in controller.pending_deletes  # the guest is gone anyway
+    controller.tick()
+    assert len(tries) == 1  # not retried before its wait
+    state["now"] += runner.DELETE_RETRY_FIRST_SECONDS
+    controller.tick()
+    assert len(tries) == 2 and 100 in controller.pending_deletes
+    state["now"] += runner.DELETE_RETRY_FIRST_SECONDS  # the second wait is twice as long
+    controller.tick()
+    assert len(tries) == 2
+    state["now"] += runner.DELETE_RETRY_FIRST_SECONDS
+    controller.tick()
+    assert github.deleted == [100] and controller.pending_deletes == {}
+
+
+def test_a_delete_still_refused_after_a_day_is_dropped(env):
+    make, state, _ = env
+    controller, github, _ = make()
+
+    def delete(runner_id):
+        raise runner.RunnerError("HTTP 422")
+
+    github.delete_runner = delete
+    controller.delete_registration(7)
+    state["now"] += runner.DELETE_RETRY_GIVE_UP_SECONDS + 1
+    controller.retry_deletes()
+    assert controller.pending_deletes == {}
+
+
+def test_an_idle_pool_polls_less_often_and_work_resets_it(env):
+    make, state, _ = env
+    controller, github, _ = make()
+    mid = lambda: 0.5  # noqa: E731 (no jitter)
+    waits = []
+    for _ in range(6):
+        controller.tick()
+        waits.append(controller.next_interval(mid))
+    assert waits == sorted(waits) and waits[0] > runner.POLL_SECONDS
+    assert waits[-1] == runner.IDLE_POLL_MAX_SECONDS
+    github.jobs = [job("klukai-amarillo-small")]
+    controller.tick()
+    assert controller.next_interval(mid) == runner.POLL_SECONDS
+
+
+def test_poll_jitter_stays_within_its_band(env):
+    make, _, _ = env
+    controller, _, _ = make([job("klukai-amarillo-small")])
+    controller.tick()
+    low = controller.next_interval(lambda: 0.0)
+    high = controller.next_interval(lambda: 1.0)
+    assert low == pytest.approx(runner.POLL_SECONDS * (1 - runner.POLL_JITTER))
+    assert high == pytest.approx(runner.POLL_SECONDS * (1 + runner.POLL_JITTER))
+
+
+def test_the_next_tick_waits_out_a_rate_limit_pause(env):
+    make, state, _ = env
+    controller, github, _ = make()
+    github.paused_until = state["now"] + 500
+    assert controller.next_interval(lambda: 0.5) == 500

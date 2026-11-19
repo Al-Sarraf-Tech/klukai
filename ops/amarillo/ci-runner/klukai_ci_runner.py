@@ -27,6 +27,7 @@ from datetime import datetime
 import json
 import logging
 import os
+import random
 from pathlib import Path
 import re
 import secrets
@@ -111,6 +112,18 @@ IDLE_SECONDS = 900  # an idle runner this old never got a job: free its capacity
 # of another kind instead of holding them until IDLE_SECONDS.
 SURPLUS_GRACE_SECONDS = 120
 SLOTS = 4  # static guest addresses <SUBNET>.10-13
+# GitHub API budget (owner, 2026-11-19): every Klukai pool, uci and the owner's tools share one
+# 5000-requests-an-hour token, and two 5 s pollers without caching drained it. Every GET is a
+# conditional request (a 304 does not count against the limit); an idle pool polls less often;
+# all calls pause when the remaining budget runs low; a refused runner delete is retried later.
+POLL_SECONDS = 5.0  # while guests run or jobs wait
+IDLE_POLL_MAX_SECONDS = 30.0  # an empty queue doubles the wait up to this
+POLL_JITTER = 0.2  # +-20 %, so the hosts' pollers do not line up
+RATE_LIMIT_FLOOR = 250  # stop calling GitHub below this many remaining requests
+RATE_LIMIT_PAUSE_MAX = 3600.0
+DELETE_RETRY_FIRST_SECONDS = 60.0
+DELETE_RETRY_MAX_SECONDS = 600.0
+DELETE_RETRY_GIVE_UP_SECONDS = 86400.0  # GitHub drops an offline JIT runner by then anyway
 
 ROOT = Path("/var/lib/libvirt/images/klukai-ci")
 BASE = ROOT / "base" / "base.qcow2"
@@ -170,34 +183,96 @@ def mem_available_mib(meminfo: Path = Path("/proc/meminfo")) -> int:
 
 
 class GitHub:
-    def __init__(self, token: str, opener: Callable[..., Any] = urllib.request.urlopen):
-        self._token, self._open = token, opener
+    def __init__(
+        self,
+        token: str,
+        opener: Callable[..., Any] = urllib.request.urlopen,
+        clock: Callable[[], float] = time.time,
+    ):
+        self._token, self._open, self._clock = token, opener, clock
         self.assigned_runners: set[int] = set()
+        self._etags: dict[str, tuple[str, Any]] = {}  # GET path -> (ETag, parsed body)
+        self.paused_until = 0.0  # no calls before this epoch (rate limit)
+        self.remaining: int | None = None
+
+    def _note_rate_limit(self, headers: Any, status: int) -> None:
+        """Read X-RateLimit-* and pause every call while the shared budget is low or spent."""
+        headers = headers or {}
+        try:
+            remaining = int(headers.get("X-RateLimit-Remaining"))
+        except (TypeError, ValueError):
+            remaining = None
+        try:
+            reset = float(headers.get("X-RateLimit-Reset"))
+        except (TypeError, ValueError):
+            reset = None
+        now = self._clock()
+        if remaining is not None:
+            self.remaining = remaining
+        spent = status in (403, 429) and (remaining == 0 or headers.get("Retry-After"))
+        if (remaining is not None and remaining < RATE_LIMIT_FLOOR) or spent:
+            if reset is not None:
+                until = reset + 5
+            else:
+                try:
+                    until = now + float(headers.get("Retry-After") or 60)
+                except ValueError:
+                    until = now + 60
+            until = min(until, now + RATE_LIMIT_PAUSE_MAX)
+            if until > self.paused_until:
+                self.paused_until = until
+                log.warning(
+                    "GitHub budget low (%s left): pausing GitHub calls until %s",
+                    "?" if remaining is None else remaining,
+                    datetime.fromtimestamp(until).strftime("%H:%M:%S"),
+                )
 
     def call(self, method: str, path: str, body: dict | None = None) -> Any:
+        where = f"GitHub {method} {path.split('?')[0]}"
+        if self._clock() < self.paused_until:
+            raise RunnerError(f"{where}: paused for the rate limit")
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+        }
+        cached = self._etags.get(path) if method == "GET" else None
+        if cached is not None:
+            headers["If-None-Match"] = cached[0]  # a 304 costs no rate limit
         request = urllib.request.Request(
             API + path,
             method=method,
             data=None if body is None else json.dumps(body).encode(),
-            headers={
-                "Authorization": f"Bearer {self._token}",
-                "Accept": "application/vnd.github+json",
-                "X-GitHub-Api-Version": "2022-11-28",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
         )
         try:
             with self._open(request, timeout=30) as response:
                 raw = response.read()
+                response_headers = getattr(response, "headers", None)
+                status = getattr(response, "status", 200)
         except urllib.error.HTTPError as error:
-            raise RunnerError(
-                f"GitHub {method} {path.split('?')[0]}: HTTP {error.code}"
-            ) from None
+            self._note_rate_limit(error.headers, error.code)
+            if error.code == 304 and cached is not None:
+                return cached[1]
+            raise RunnerError(f"{where}: HTTP {error.code}") from None
         except (urllib.error.URLError, TimeoutError, OSError):
-            raise RunnerError(
-                f"GitHub {method} {path.split('?')[0]}: unreachable"
-            ) from None
-        return json.loads(raw) if raw else None
+            raise RunnerError(f"{where}: unreachable") from None
+        self._note_rate_limit(response_headers, status)
+        if status == 304 and cached is not None:
+            return cached[1]
+        data = json.loads(raw) if raw else None
+        etag = (response_headers or {}).get("ETag") if method == "GET" else None
+        if etag:
+            self._etags[path] = (etag, data)
+        elif method == "GET":
+            self._etags.pop(path, None)
+        return data
+
+    def forget(self, prefix: str, keep: set[str]) -> None:
+        """Drop cached GETs under prefix that are not in keep (finished runs, removed runners)."""
+        for path in [p for p in self._etags if p.startswith(prefix) and p not in keep]:
+            del self._etags[path]
 
     def queued_jobs(self) -> list[dict[str, Any]]:
         """Queued jobs of Klukai's pending, queued or running workflows."""
@@ -231,6 +306,13 @@ class GitHub:
                     if j.get("status") != "queued" and j.get("runner_id")
                 )
         self.assigned_runners = assigned
+        self.forget(
+            f"/repos/{REPO}/actions/runs/",
+            {
+                f"/repos/{REPO}/actions/runs/{run_id}/jobs?filter=latest&per_page=100"
+                for run_id in seen_runs
+            },
+        )
         unique = {job["id"]: job for job in jobs}
         return sorted(
             unique.values(), key=lambda j: (j.get("created_at") or "", j.get("id") or 0)
@@ -491,6 +573,11 @@ class Controller:
         )
         self.state_file = state_file
         self.first_seen: dict[int, float] = {}  # other-pool jobs we might take over
+        # runner id -> (next try, tries, first failure): deletes GitHub refused (HTTP 422 while a
+        # dead guest still holds its job), retried with growing waits instead of every tick.
+        self.pending_deletes: dict[int, tuple[float, int, float]] = {}
+        self.idle_polls = 0  # consecutive ticks with nothing running or waiting
+        self.had_work = False
         self._beat: tuple[str, float] = ("", 0.0)
         self.guests: dict[str, Guest] = self._load()
 
@@ -675,11 +762,35 @@ class Controller:
         log.info("started %s (%s) for a queued job", name, profile.label)
         return guest
 
+    def delete_registration(self, runner_id: int) -> None:
+        """Delete a runner registration now, or queue a retry with growing waits."""
+        try:
+            self.github.delete_runner(runner_id)
+        except RunnerError as error:
+            now = self.clock()
+            _, tries, first = self.pending_deletes.get(runner_id, (0.0, 0, now))
+            wait = min(DELETE_RETRY_MAX_SECONDS, DELETE_RETRY_FIRST_SECONDS * 2 ** tries)
+            self.pending_deletes[runner_id] = (now + wait, tries + 1, first)
+            if tries == 0:
+                log.warning("runner %s not deleted yet (%s); retrying in %d s", runner_id, error, wait)
+            return
+        if self.pending_deletes.pop(runner_id, None) is not None:
+            log.info("runner %s deleted", runner_id)
+
+    def retry_deletes(self) -> None:
+        now = self.clock()
+        for runner_id, (due, tries, first) in list(self.pending_deletes.items()):
+            if now - first > DELETE_RETRY_GIVE_UP_SECONDS:
+                log.warning("giving up deleting runner %s after %d tries", runner_id, tries)
+                del self.pending_deletes[runner_id]
+            elif now >= due:
+                self.delete_registration(runner_id)
+
     def teardown(self, name: str) -> None:
         guest = self.guests.get(name)
         self.sh(*VIRSH, "destroy", name, check=False)
         if guest is not None:
-            self.github.delete_runner(guest.runner_id)
+            self.delete_registration(guest.runner_id)
         if NAME_RE.fullmatch(name):
             shutil.rmtree(JOBS / name, ignore_errors=True)
         self.guests.pop(name, None)
@@ -777,7 +888,22 @@ class Controller:
         order = sorted({**STEAL_PROFILES, **PROFILES}.values(), key=lambda p: (priority[p.kind], p.label))
         return [p for p in order for _ in range(wanted.get(p.label, 0))]
 
+    def next_interval(self, rand: Callable[[], float] = random.random) -> float:
+        """Seconds to the next tick: POLL_SECONDS while work runs or waits, doubling up to
+        IDLE_POLL_MAX_SECONDS on an empty queue, +-POLL_JITTER; and no sooner than the rate-limit pause."""
+        if self.had_work:
+            self.idle_polls = 0
+            base = POLL_SECONDS
+        else:
+            self.idle_polls += 1
+            base = min(IDLE_POLL_MAX_SECONDS, POLL_SECONDS * 2 ** min(self.idle_polls, 8))
+        wait = base * (1 + POLL_JITTER * (2 * rand() - 1))
+        paused = getattr(self.github, "paused_until", 0.0) - self.clock()
+        return max(wait, min(paused, RATE_LIMIT_PAUSE_MAX)) if paused > 0 else wait
+
     def tick(self) -> None:
+        self.had_work = bool(self.guests)
+        self.retry_deletes()
         self.reap()
         if not self.guests:  # never re-own files a running guest is writing
             prune_build_caches(ARTIFACTS, now=self.clock())
@@ -790,7 +916,9 @@ class Controller:
         if reason:
             log.debug("not starting guests: %s", reason)
             return
-        for profile in self.demand():
+        wanted = self.demand()
+        self.had_work = self.had_work or bool(wanted) or bool(self.guests)
+        for profile in wanted:
             why = self.admit(profile)
             while why in ("CPU budget in use", "all slots in use") and self.surplus:
                 name = self.surplus.pop(0)
@@ -925,14 +1053,18 @@ def main() -> int:
     if HOST_CONFIG.is_file():
         configure(json.loads(HOST_CONFIG.read_text()))
     controller = Controller(GitHub(read_token()))
+    global POLL_SECONDS
+    POLL_SECONDS = args.interval
     while True:
         try:
             controller.tick()
         except RunnerError as error:
-            log.error("%s", error)
+            if "paused for the rate limit" not in str(error):
+                log.error("%s", error)
+            controller.had_work = bool(controller.guests)
         if args.once:
             return 0
-        time.sleep(args.interval)
+        time.sleep(controller.next_interval())
 
 
 if __name__ == "__main__":

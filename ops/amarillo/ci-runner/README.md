@@ -24,6 +24,12 @@ amarillo, as before. Other repositories keep the Dominus fleet runners.
   `/run/user/1000/dominus-gpu/game-active` exists) and outside 23:00-08:00,
   its controller writes the repository variable `KLUKAI_CI_DOMINUS_HEARTBEAT`
   every minute, and `0` otherwise.
+- **GitHub API budget** (owner, 2026-11-19). Both controllers, uci and the owner's tools share
+  one 5000-an-hour token. Every GET is a conditional request (`If-None-Match`; a 304 costs
+  nothing); with nothing running or queued the poll interval doubles from 5 s to 30 s, with
+  +-20 % jitter; below 250 remaining requests every call pauses until `X-RateLimit-Reset`;
+  a refused runner delete (HTTP 422 while a dead guest holds its job) is retried after
+  60 s, doubling to 10 minutes, and dropped after a day instead of every tick.
 - **Routing.** CI's first job (`tools/ci/pool.py`) reads the heartbeat:
   - **under 150 s old:** `ci-image` → `test`/`real-backends`, the component
     suites (one VM per suite) and Flutter go to Dominus;
