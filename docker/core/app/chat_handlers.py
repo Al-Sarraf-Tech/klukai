@@ -11,6 +11,7 @@ import asyncio as asyncio
 import logging
 import time
 from datetime import datetime
+from typing import Any
 
 
 from .picture_denial import neutralise_denials
@@ -95,9 +96,9 @@ _FAILURE_PREFIX = FAILURE_SENTINEL.split(",", 1)[0]
 # A new ChatFollowups is built for every message. The extraction queue has to
 # outlive that object, or the previous turn's job starts while he is still
 # replying and two turns spend the ledger at once.
-_TURN_EXTRACT_QUEUE: dict[str, list] = {}
+_TURN_EXTRACT_QUEUE: dict[str, list[Any]] = {}
 _TURN_EXTRACT_GEN: dict[str, int] = {}
-_TURN_EXTRACT_RUNNER: dict[str, asyncio.Task] = {}
+_TURN_EXTRACT_RUNNER: dict[str, asyncio.Task[Any]] = {}
 
 
 async def _drop_unanswered_turn(

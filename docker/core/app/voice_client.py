@@ -199,13 +199,16 @@ def join_wavs(parts: list[bytes]) -> bytes:
         return b""
     if len(parts) == 1:
         return parts[0]
-    parsed = [_wav_pcm(part) for part in parts]
-    if any(item is None for item in parsed):
+    ready: list[tuple[bytes, bytes]] = []
+    for part in parts:
+        parsed = _wav_pcm(part)
+        if parsed is None:
+            return b"".join(parts)
+        ready.append(parsed)
+    fmt = ready[0][0]
+    if any(item[0] != fmt for item in ready):
         return b"".join(parts)
-    fmt = parsed[0][0]
-    if any(item[0] != fmt for item in parsed):
-        return b"".join(parts)
-    return _wav_from_pcm(fmt, b"".join(item[1] for item in parsed))
+    return _wav_from_pcm(fmt, b"".join(item[1] for item in ready))
 
 
 async def post_tts(

@@ -80,7 +80,7 @@ def verify_frame(user_id: str, outfit_id: str, frame: str, sig: str) -> bool:
         exp = int(exp_part)
     except (ValueError, AttributeError):
         return False
-    now = signed_urls.time.time()
+    now = time.time()
     if now <= exp or now > exp + FRAME_CACHE_S:
         return False
     return _mac_matches(sig_part, resource, user_id, exp)

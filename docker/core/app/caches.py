@@ -254,7 +254,10 @@ async def _pin_guard(op: Callable[[], Awaitable[Any]]) -> Any:
 async def _pin_eval(script: str, keys: list[str], args: list[str]) -> Any:
     async def run() -> Any:
         client = await _pin_client()
-        return await client.eval(script, len(keys), *keys, *args)
+        evaluated = client.eval(script, len(keys), *keys, *args)
+        if isinstance(evaluated, str):
+            return evaluated
+        return await evaluated
 
     return await _pin_guard(run)
 

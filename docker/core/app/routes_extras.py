@@ -143,6 +143,8 @@ def register_extras(app: FastAPI) -> None:
         except Exception:
             return _fact_control_error("invalid")
         value = body.get("value") if isinstance(body, dict) else None
+        if not isinstance(value, str):
+            return _fact_control_error("invalid")
         try:
             return await memory.correct_relationship_fact(
                 fact_id, value, user_id=user_id

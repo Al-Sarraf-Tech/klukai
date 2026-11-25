@@ -254,13 +254,14 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
             import io
             import wave
 
+            wav: bytes
             if len(audios) == 1:
-                audio = audios[0]
+                wav = audios[0]
             else:
                 frames: list[bytes] = []
                 params = None
-                for part in audios:
-                    with wave.open(io.BytesIO(part), "rb") as src:
+                for chunk in audios:
+                    with wave.open(io.BytesIO(chunk), "rb") as src:
                         current = src.getparams()
                         if params is None:
                             params = current
@@ -280,8 +281,8 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                     dst.setframerate(params.framerate)
                     for frame in frames:
                         dst.writeframes(frame)
-                audio = out.getvalue()
-            return {"audio": base64.b64encode(audio).decode()}
+                wav = out.getvalue()
+            return {"audio": base64.b64encode(wav).decode()}
         except TimeoutError:
             logger.warning("TTS timed out waiting on the voice service")
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)
