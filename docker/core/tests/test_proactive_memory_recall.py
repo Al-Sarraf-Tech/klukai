@@ -146,8 +146,8 @@ class TestMemoryRecallEvent:
         assert e._memory_recall_delivered_today is False
 
     @pytest.mark.asyncio
-    async def test_llm_failure_falls_back_to_template(self):
-        """Haiku fails -> a non-empty fallback message is still delivered."""
+    async def test_llm_failure_stays_silent(self):
+        """Haiku fails -> no generic 'back then' line, and the day can retry."""
         e = _recall_engine(affection=7)
         with _patch_now(), \
              patch("app.memory_archive.recall_memory",
@@ -156,16 +156,13 @@ class TestMemoryRecallEvent:
             await e._memory_recall_event()  # must not raise
 
         haiku.assert_awaited_once()
-        e._on_message_callback.assert_awaited_once()
-        delivered = e._on_message_callback.call_args.args[0]
-        assert delivered and delivered.strip()  # non-empty fallback
-        # Fallback must NOT quote the journal entry verbatim.
-        assert "observation deck" not in delivered
-        assert e._memory_recall_delivered_today is True
+        e._on_message_callback.assert_not_awaited()
+        assert e._memory_recall_delivered_today is False
+        assert e._proactive_count_today == 0
 
     @pytest.mark.asyncio
-    async def test_empty_llm_string_falls_back_to_template(self):
-        """Haiku returns a blank string -> fallback template is delivered."""
+    async def test_empty_llm_string_stays_silent(self):
+        """A blank model line is not replaced with a remember-when template."""
         e = _recall_engine(affection=5)
         with _patch_now(), \
              patch("app.memory_archive.recall_memory",
@@ -174,10 +171,8 @@ class TestMemoryRecallEvent:
             await e._memory_recall_event()
 
         haiku.assert_awaited_once()
-        e._on_message_callback.assert_awaited_once()
-        delivered = e._on_message_callback.call_args.args[0]
-        assert delivered and delivered.strip()
-        assert "observation deck" not in delivered
+        e._on_message_callback.assert_not_awaited()
+        assert e._memory_recall_delivered_today is False
 
     @pytest.mark.asyncio
     async def test_archive_exception_returns_silently(self):

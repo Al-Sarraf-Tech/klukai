@@ -236,6 +236,20 @@ def _extract_day(text: str, today: date) -> date | None:
     return None
 
 
+def local_wall(now: datetime) -> datetime:
+    """Naive America/Chicago wall time.
+
+    An aware instant keeps its UTC offset if it is only labeled, which puts
+    an evening in Chicago on the next UTC day. Callers that already pass a
+    naive local clock are unchanged.
+    """
+    if now.tzinfo is None:
+        return now
+    from .proactive.state import LOCAL_TZ
+
+    return now.astimezone(LOCAL_TZ).replace(tzinfo=None)
+
+
 def resolve_when(hint: Any, now: datetime) -> When | None:
     """Resolve the Commander's words for *when* into a local day (+ time).
 
@@ -245,6 +259,7 @@ def resolve_when(hint: Any, now: datetime) -> When | None:
     """
     if not isinstance(hint, str) or not hint.strip():
         return None
+    now = local_wall(now)
     text = " " + hint.lower().strip() + " "
     today = now.date()
     at, rest = _extract_time(text)
@@ -285,6 +300,7 @@ HOLD_MAX = timedelta(hours=3)
 
 def plan_slots(when: When, now: datetime) -> list[tuple[str, datetime]]:
     """The chain for one event as naive local datetimes, past slots removed."""
+    now = local_wall(now)
     event_dt = datetime.combine(when.day, when.at) if when.at else None
     slots: list[tuple[str, datetime]] = [
         ("brief", datetime.combine(when.day - timedelta(days=1), BRIEF_AT)),

@@ -474,24 +474,35 @@ class TestSettingRoutes:
         assert {"GET", "PUT"} <= methods
 
 
-# ── Japanese through the chat LLM ─────────────────────────────────────────
+# ── Japanese through the background writer ────────────────────────────────
 
 
-class _Router:
-    """The chat router's ``route`` + ``stream`` surface."""
+class _Translator:
+    """``background_llm.text`` stand-in. Translation is not the chat route."""
 
-    def __init__(self, tokens: list[str] | None = None, *, delay: float = 0.0):
+    def __init__(
+        self,
+        tokens: list[str] | None = None,
+        *,
+        delay: float = 0.0,
+        error: BaseException | None = None,
+    ):
         self.tokens = tokens if tokens is not None else ["はい、", "指揮官。"]
         self.delay = delay
-        self.route = AsyncMock(return_value=MagicMock(provider="anthropic"))
-        self.calls: list[tuple[str, list[dict[str, Any]], Any]] = []
+        self.error = error
+        self.calls: list[tuple[str, str, str, int]] = []
 
-    async def stream(self, system, messages, config):
-        self.calls.append((system, messages, config))
+    async def text(self, caller, prompt, *, system, max_tokens, **_kwargs):
+        self.calls.append((caller, prompt, system, max_tokens))
         if self.delay:
             await asyncio.sleep(self.delay)
-        for token in self.tokens:
-            yield token
+        if self.error is not None:
+            raise self.error
+        return "".join(self.tokens)
+
+
+def _llm(translator: _Translator):
+    return patch("app.background_llm.text", translator.text)
 
 
 @pytest.fixture
@@ -506,16 +517,15 @@ def redis_cache(fake_redis, monkeypatch):
 
 
 class TestTranslation:
-    async def test_uses_the_interactive_chat_path(self, redis_cache):
-        router = _Router()
-        with patch("app.context.router", router):
+    async def test_uses_the_background_path(self, redis_cache):
+        writer = _Translator()
+        with _llm(writer):
             result = await voice_language.translate_to_japanese("Yes, Commander.")
         assert result == "はい、指揮官。"
-        router.route.assert_awaited_once()
-        assert router.route.await_args.kwargs == {"interactive": True}
-        system, messages, _config = router.calls[0]
+        caller, prompt, system, _max = writer.calls[0]
+        assert caller == "voice_translation"
         assert system == voice_language.TRANSLATION_PROMPT
-        assert messages == [{"role": "user", "content": "Yes, Commander."}]
+        assert prompt == "Yes, Commander."
 
     def test_prompt_sets_her_register(self):
         prompt = voice_language.TRANSLATION_PROMPT
@@ -523,12 +533,12 @@ class TestTranslation:
             assert needle in prompt
 
     async def test_a_replay_is_served_from_cache(self, redis_cache):
-        router = _Router()
-        with patch("app.context.router", router):
+        writer = _Translator()
+        with _llm(writer):
             first = await voice_language.translate_to_japanese("Yes, Commander.")
             second = await voice_language.translate_to_japanese("Yes, Commander.")
         assert first == second == "はい、指揮官。"
-        assert len(router.calls) == 1
+        assert len(writer.calls) == 1
         assert any(key.startswith("cache:voice:ja:") for key in redis_cache._store)
 
     async def test_cache_write_has_a_ttl(self):
@@ -551,7 +561,7 @@ class TestTranslation:
             raise ConnectionError("redis down")
 
         monkeypatch.setattr(caches, "_get", _down)
-        with patch("app.context.router", _Router()):
+        with _llm(_Translator()):
             assert await voice_language.translate_to_japanese("Yes.") == "はい、指揮官。"
 
     @pytest.mark.parametrize(
@@ -566,7 +576,7 @@ class TestTranslation:
         ],
     )
     async def test_output_is_cleaned(self, redis_cache, raw, spoken):
-        with patch("app.context.router", _Router([raw])):
+        with _llm(_Translator([raw])):
             assert await voice_language.translate_to_japanese("line") == spoken
 
     @pytest.mark.parametrize(
@@ -580,32 +590,31 @@ class TestTranslation:
         ids=["sentinel", "english", "blank", "nothing"],
     )
     async def test_no_japanese_falls_back_to_english(self, redis_cache, tokens):
-        with patch("app.context.router", _Router(tokens)):
+        with _llm(_Translator(tokens)):
             assert await voice_language.translate_to_japanese("Yes.") is None
             assert await voice_language.speech_for("Yes.", "ja") == ("Yes.", "en")
         assert redis_cache._store == {}
 
     async def test_router_failure_falls_back_to_english(self, redis_cache):
-        router = _Router()
-        router.route = AsyncMock(side_effect=RuntimeError("No local LLM backend"))
-        with patch("app.context.router", router):
+        writer = _Translator(error=RuntimeError("background writer down"))
+        with _llm(writer):
             assert await voice_language.speech_for("Yes.", "ja") == ("Yes.", "en")
 
     async def test_slow_translation_falls_back_to_english(
         self, redis_cache, monkeypatch
     ):
         monkeypatch.setattr(voice_language, "TRANSLATION_TIMEOUT", 0.01)
-        with patch("app.context.router", _Router(delay=1.0)):
+        with _llm(_Translator(delay=1.0)):
             assert await voice_language.speech_for("Yes.", "ja") == ("Yes.", "en")
 
     async def test_english_never_calls_the_llm(self):
-        router = _Router()
-        with patch("app.context.router", router):
+        writer = _Translator()
+        with _llm(writer):
             assert await voice_language.speech_for("Yes.", "en") == ("Yes.", "en")
-        router.route.assert_not_awaited()
+        assert writer.calls == []
 
     async def test_japanese_speech(self, redis_cache):
-        with patch("app.context.router", _Router()):
+        with _llm(_Translator()):
             assert await voice_language.speech_for("Yes.", "ja") == (
                 "はい、指揮官。",
                 "ja",

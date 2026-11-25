@@ -118,11 +118,14 @@ class ChatReplyRuntime:
             # No cloud model is configured (flag or key missing). Degrade
             # in-band exactly like a pre-token stream failure (the sentinel is
             # the whole reply) instead of letting the WS loop log a traceback
-            # and tell him "something glitched" on every turn.
+            # and tell him "something glitched" on every turn. done carries the
+            # cue too: a second device may have missed the token frame.
             logger.warning("No LLM available this turn: %s", e)
             await self.ws.send_token(user_id, FAILURE_SENTINEL)
-            await self.ws.send_done(user_id, msg_id, "offline")
-            return ChatReply("", "offline", 0, True)
+            await self.ws.send_done(
+                user_id, msg_id, "offline", final_text=FAILURE_SENTINEL
+            )
+            return ChatReply(FAILURE_SENTINEL, "offline", 0, True)
         logger.info("Routing to %s/%s", config.provider, config.model)
 
         # Typing is already on (sent when the turn was accepted). If the
@@ -155,8 +158,18 @@ class ChatReplyRuntime:
             # Mid-stream death: don't propagate (it would kill the WS). The
             # user message is already persisted; surface an explicit error,
             # finalize the truncated reply for the UI, and skip follow-ups.
+            # Retire the warmup first. Its "One moment" landing during the
+            # error send reads as if the cut-off reply were still coming.
             stream_failed = True
             logger.error("LLM stream failed mid-response: %s", e)
+            if (
+                warmup_timer is not None
+                and not warmup_timer.done()
+                and not warmup_timer.cancelling()
+            ):
+                warmup_timer.cancel()
+            if warmup_timer is not None:
+                await asyncio.gather(warmup_timer, return_exceptions=True)
             await self.ws.send(
                 user_id,
                 {
@@ -188,8 +201,17 @@ class ChatReplyRuntime:
 
         # A reconnecting/second device may have missed earlier token frames.
         # Complete replies carry the whole canonical line, even if unchanged.
+        # A cut-off stream must not: narration can change the partial, and
+        # publishing that as done.text makes the fragment look finished.
+        # An empty body replaced by the sentinel still has to ride on done,
+        # because that cue was not in the raw stream.
         failed = stream_failed or response_text.startswith(self.failure_prefix)
-        final_text = response_text if not failed or response_text != raw_text else None
+        if stream_failed:
+            final_text = None
+        elif not failed or response_text != raw_text:
+            final_text = response_text
+        else:
+            final_text = None
         reply = ChatReply(response_text, model_name, latency_ms, failed)
         if not failed and self.on_completed is not None:
             self.on_completed(reply)

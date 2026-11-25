@@ -65,6 +65,18 @@ class XaiCapError(XaiChatError):
     """Today's USD cap is already spent."""
 
 
+_CUT_OFF = frozenset({"length", "max_tokens"})
+
+
+def cut_off(payload: dict[str, Any]) -> bool:
+    """True when the provider stopped because the token budget ran out."""
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+        return False
+    reason = choices[0].get("finish_reason")
+    return isinstance(reason, str) and reason in _CUT_OFF
+
+
 def content_delta(payload: dict[str, Any]) -> str | None:
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
@@ -265,11 +277,15 @@ async def iter_text(
     if conv:
         headers["x-grok-conv-id"] = conv
     yielded = False
+    saw_done = False
+    hit_limit = False
     auth_failed = False
     # None: no reply yet (nothing billed unless the request already left).
     status: int | None = None
     sent = False
     output_chars = 0
+    # Same rule as Claude: blank deltas are not a successful reply.
+    held: list[str] = []
     transport = httpx.AsyncHTTPTransport(retries=0, trust_env=False)
     try:
         async with httpx.AsyncClient(
@@ -301,7 +317,10 @@ async def iter_text(
                             if event is None:
                                 continue
                             if event.get("type") == "done":
+                                saw_done = True
                                 break
+                            if cut_off(event):
+                                hit_limit = True
                             found = usage_counts(event)
                             if found is not None:
                                 counts = found
@@ -313,15 +332,29 @@ async def iter_text(
                             piece = content_delta(event)
                             if piece is None:
                                 continue
-                            if first is None:
-                                first = time.monotonic()
-                            yielded = True
                             output_chars += len(piece)
-                            yield piece
+                            if not yielded:
+                                held.append(piece)
+                                if not "".join(held).strip():
+                                    continue
+                                if first is None:
+                                    first = time.monotonic()
+                                yielded = True
+                                for part in held:
+                                    yield part
+                                held.clear()
+                            else:
+                                yield piece
         if auth_failed:
             raise XaiAuthError("xai chat was not authorized")
+        if hit_limit:
+            raise XaiChatError("xai chat hit its token limit")
         if not yielded:
             raise XaiChatError("xai chat returned no text")
+        if not saw_done:
+            # The socket closed after a partial reply. That is a failure, not
+            # a short answer: the caller must keep the text and show the cue.
+            raise XaiChatError("xai chat ended before the reply finished")
     except XaiChatError:
         raise
     except CircuitOpen as exc:
@@ -433,6 +466,8 @@ async def complete_text(
             hold=hold,
             fallback_usd=_partial_usd(prompt_chars, max_tokens * 3),
         )
+        if cut_off(payload):
+            raise XaiChatError("xai chat hit its token limit")
         if not text:
             raise XaiChatError("xai chat returned no text")
         return text

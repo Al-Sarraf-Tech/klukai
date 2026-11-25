@@ -217,6 +217,11 @@ async def set_crown_jewel(user_id: str, tribute_id: str) -> bool:
     try:
         pool = get_pool()
         async with pool.connection() as conn:
+            # Same per-user lock as save_tribute, so two crowns cannot land.
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(%s, hashtext(%s))",
+                (_TRIBUTE_LOCK_NS, user_id),
+            )
             # Verify the tribute exists + belongs to this user
             row = await (
                 await conn.execute(
@@ -227,18 +232,13 @@ async def set_crown_jewel(user_id: str, tribute_id: str) -> bool:
             if not row:
                 return False
 
-            # Demote any existing crown jewel
+            # One write: this id becomes the jewel and every other row for him
+            # drops. Two updates used to leave both true if the second commit
+            # raced the first.
             await conn.execute(
-                "UPDATE companion_tributes SET is_crown_jewel = false "
-                "WHERE user_id = %s AND is_crown_jewel = true",
-                (user_id,),
-            )
-
-            # Promote the chosen one
-            await conn.execute(
-                "UPDATE companion_tributes SET is_crown_jewel = true "
-                "WHERE id = %s AND user_id = %s",
-                (tribute_id, user_id),
+                "UPDATE companion_tributes SET is_crown_jewel = (id = %s) "
+                "WHERE user_id = %s AND (is_crown_jewel OR id = %s)",
+                (tribute_id, user_id, tribute_id),
             )
             await conn.commit()
         logger.info("Crown jewel set: user=%s id=%s", user_id, tribute_id)

@@ -230,3 +230,36 @@ class WebSocketService {
     _authFailureController.close();
   }
 }
+
+/// A socket field that is allowed to open or extend a chat turn.
+///
+/// Missing, non-string, and blank values are not a turn: they must not lock
+/// the composer or insert a bubble. A real delta keeps its own spacing.
+String? turnText(Object? value) {
+  if (value is! String) return null;
+  if (value.trim().isEmpty) return null;
+  return value;
+}
+
+/// Whether a row is hers to read aloud. Error rows are the link reporting a
+/// failure, not her voice; speaking them spends a synthesis lease on an apology.
+bool lineIsSpeakable({
+  required String id,
+  required String content,
+  required bool isStreaming,
+}) =>
+    !isStreaming &&
+    !id.startsWith('error-') &&
+    content.trim().isNotEmpty &&
+    content != '[IMAGE]';
+
+/// Whether an incoming line may move the transcript.
+///
+/// On a short phone he is often reading older rows. A token, picture, or
+/// error must not cancel that scroll. [force] is his own send, the latest
+/// button, or a view change. [dragging] is a finger still on the list.
+bool shouldFollowTail({
+  required bool pinned,
+  bool dragging = false,
+  bool force = false,
+}) => force || (pinned && !dragging);

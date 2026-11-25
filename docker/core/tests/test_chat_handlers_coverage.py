@@ -627,7 +627,7 @@ class TestPromptAssembly:
     @pytest.mark.asyncio
     async def test_birthday_block_appended(self):
         prompt = await self._captured_prompt("morning", birthday_block="COMMANDER'S BIRTHDAY: today")
-        assert prompt.endswith("COMMANDER'S BIRTHDAY: today")
+        assert "COMMANDER'S BIRTHDAY: today" in prompt
 
     @pytest.mark.asyncio
     async def test_context_summary_prepended_as_system_message(self):

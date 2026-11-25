@@ -520,8 +520,27 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     return pos.maxScrollExtent - pos.pixels < 150;
   }
 
-  void _scrollToBottom({bool instant = false, int retries = 0}) {
+  void _scrollToBottom({
+    bool instant = false,
+    int retries = 0,
+    bool force = true,
+  }) {
+    if (!shouldFollowTail(
+      pinned: _pinnedToBottom,
+      dragging: _transcriptScrolling,
+      force: force,
+    )) {
+      return;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !shouldFollowTail(
+            pinned: _pinnedToBottom,
+            dragging: _transcriptScrolling,
+            force: force,
+          )) {
+        return;
+      }
       if (_scrollController.hasClients) {
         final target = _scrollController.position.maxScrollExtent;
         if (instant) {
@@ -536,7 +555,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         // Images decode asynchronously — re-scroll to catch layout shifts
         if (retries > 0) {
           Future.delayed(const Duration(milliseconds: 150), () {
-            _scrollToBottom(instant: true, retries: retries - 1);
+            if (!mounted) return;
+            _scrollToBottom(
+              instant: true,
+              retries: retries - 1,
+              force: force,
+            );
           });
         }
       }

@@ -177,5 +177,7 @@ class _ECGPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_ECGPainter oldDelegate) =>
-      oldDelegate.progress != progress || oldDelegate.color != color;
+      oldDelegate.progress != progress ||
+      oldDelegate.color != color ||
+      oldDelegate.bpm != bpm;
 }

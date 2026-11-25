@@ -5,17 +5,23 @@ part of 'chat_screen.dart';
 extension _ChatWireEvents on _ChatScreenState {
   void _handleWSMessage(Map<String, dynamic> msg) {
     if (!mounted || _authExpired) return;
-    final type = msg['type'] as String?;
+    final rawType = msg['type'];
+    if (rawType != null && rawType is! String) return;
+    final type = rawType as String?;
 
     switch (type) {
       case 'token':
-        final text = msg['text'] as String? ?? '';
+        // Blank or non-string deltas are not a turn.
+        final text = msg['text'];
+        if (text is! String) break;
+        final starting = _streamingId == null;
+        if (starting && turnText(text) == null) break;
         _clearWarmupHint(); // she's replying — drop the fallback waiting notice
         // The first token always (re)arms the lock for the whole reply. A
         // shorter lock may be active (proactive 1.5s, image 2s, heartbeat 5s);
         // left alone it would lapse mid-reply, freeing the composer while she
         // is still talking. Later tokens only re-arm if the lock has lapsed.
-        if (_streamingId == null || !_state.isInputLocked) {
+        if (starting || !_state.isInputLocked) {
           _lockInput(
             'RECEIVING TRANSMISSION',
             timeout: const Duration(seconds: 60),
@@ -43,10 +49,11 @@ extension _ChatWireEvents on _ChatScreenState {
             }
           }
         });
-        _scrollToBottom(instant: true);
+        _scrollToBottom(instant: true, force: false);
 
       case 'done':
-        final model = msg['model'] as String?;
+        final rawModel = msg['model'];
+        final model = rawModel is String ? rawModel : null;
         // done.text is her reply after the server's narration fix-ups (e.g.
         // <think> blocks stripped). Showing it instead of the raw stream also
         // keeps the next history merge from adding a second copy of the line.
@@ -78,7 +85,12 @@ extension _ChatWireEvents on _ChatScreenState {
         // Older frames carry `text`, current ones `content`. An empty frame is
         // the backend clearing its status line — it must take the spinner
         // down, not leave a permanent PROCESSING behind.
-        final status = msg['text'] as String? ?? msg['content'] as String?;
+        final text = msg['text'];
+        final content = msg['content'];
+        // Only a string is a status. Anything else clears the pulse.
+        final status = text is String
+            ? text
+            : (content is String ? content : null);
         _update(() {
           if (status == null || status.isEmpty) {
             _state = _state.copyWith(isTyping: false);
@@ -157,7 +169,8 @@ extension _ChatWireEvents on _ChatScreenState {
         }
 
       case 'proactive':
-        final message = msg['message'] as String? ?? '';
+        final message = turnText(msg['message']);
+        if (message == null) break;
         _lockInput(
           'INCOMING TRANSMISSION',
           timeout: const Duration(milliseconds: 1500),
@@ -171,7 +184,7 @@ extension _ChatWireEvents on _ChatScreenState {
             ),
           );
         });
-        _scrollToBottom();
+        _scrollToBottom(force: false);
         _playNotificationSound();
         // Auto-unlock after brief pause
         Timer(const Duration(milliseconds: 1500), () {
@@ -191,9 +204,11 @@ extension _ChatWireEvents on _ChatScreenState {
         // A voice note she left while you were away. Show the text like a
         // proactive line; her recorded note plays from that line's `▶ VOICE`
         // (never by itself). Without a note, VOICE reads the text.
-        final letter = msg['message'] as String? ?? '';
-        final voiceId = msg['voice_id'] as String?;
-        if (letter.isNotEmpty) {
+        final letter = turnText(msg['message']);
+        final voiceId = msg['voice_id'] is String
+            ? msg['voice_id'] as String
+            : null;
+        if (letter != null) {
           final id = _newLocalMessageId('voice-letter');
           _update(() {
             if (voiceId != null && voiceId.isNotEmpty) {
@@ -203,12 +218,15 @@ extension _ChatWireEvents on _ChatScreenState {
               ChatMessage(id: id, role: 'assistant', content: letter),
             );
           });
-          _scrollToBottom();
+          _scrollToBottom(force: false);
           _playNotificationSound();
         }
 
       case 'image':
-        final imgData = msg['data'] as String?;
+        final rawImage = msg['data'];
+        final imgData = rawImage is String && rawImage.isNotEmpty
+            ? rawImage
+            : null;
         if (imgData != null) {
           _lockInput('IMAGE INCOMING', timeout: const Duration(seconds: 2));
           _update(() {
@@ -229,7 +247,7 @@ extension _ChatWireEvents on _ChatScreenState {
             );
           });
           // Retry scroll 3 times to catch image decode layout shifts
-          _scrollToBottom(retries: 3);
+          _scrollToBottom(retries: 3, force: false);
           _playNotificationSound();
           Timer(const Duration(seconds: 2), () {
             if (mounted && _state.inputLockReason == 'IMAGE INCOMING') {
@@ -283,8 +301,10 @@ extension _ChatWireEvents on _ChatScreenState {
         // reply cut off mid-stream keeps what arrived, frozen: no cursor
         // blinking forever on a bubble nothing will ever finish.
         _clearWarmupHint();
+        // Blank or non-string text is the apology, not an empty bubble.
+        final provided = turnText(msg['message']);
         final errText =
-            msg['message'] as String? ??
+            provided ??
             '...Something glitched on my end, Commander. Try again.';
         _update(() {
           _finalizeStreamingBubble();
@@ -297,7 +317,7 @@ extension _ChatWireEvents on _ChatScreenState {
           );
         });
         _unlockInput();
-        _scrollToBottom();
+        _scrollToBottom(force: false);
     }
   }
 

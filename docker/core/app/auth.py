@@ -233,14 +233,25 @@ async def logout(token: str) -> str | None:
     """
     if not token:
         return None
+    session_hash = _hash_token(token)
     async with get_conn_autocommit() as conn:
         row = await (
             await conn.execute(
                 "DELETE FROM companion_auth_sessions WHERE token = %s RETURNING user_id",
-                (_hash_token(token),),
+                (session_hash,),
             )
         ).fetchone()
-    return row[0] if row else None
+    if not row:
+        return None
+    user_id = str(row[0])
+    # Close this session's sockets now. Other devices stay signed in.
+    try:
+        from .context import ws
+
+        await ws.revoke_session(user_id, session_hash)
+    except Exception:
+        logger.warning("Logout could not close the live socket for %s", user_id)
+    return user_id
 
 
 async def get_user_from_token(token: str) -> str | None:

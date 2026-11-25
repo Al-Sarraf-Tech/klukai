@@ -281,13 +281,14 @@ def implied_cover(request: str) -> str:
 
 
 def _not_alone(text: str) -> bool:
-    """Another girl is named or tagged ("Groza", "2girls", "multiple girls")."""
-    from .image_gen_constants import SQUAD_KEYWORDS
+    """Another girl is named or tagged ("Groza", "g11", "2girls", "multiple girls")."""
+    from .image_prompts import detect_squad_members
 
-    names = "|".join(re.escape(name) for name in SQUAD_KEYWORDS)
+    if detect_squad_members(text):
+        return True
     return bool(
         re.search(
-            rf"\b(?:{names})\b|\b(?:[2-9]|\d\d+)\s*girls\b|\bmultiple girls\b",
+            r"\b(?:[2-9]|\d\d+)\s*girls\b|\bmultiple girls\b",
             text,
             re.IGNORECASE,
         )
@@ -297,6 +298,25 @@ def _not_alone(text: str) -> bool:
 def asks_for_nudity(text: str) -> bool:
     asked = False
     for match in _NUDITY_CUE.finditer(text):
+        if _NUDITY_REFUSED.search(text[max(0, match.start() - 60) : match.start()]):
+            return False
+        asked = True
+    return asked
+
+
+# A sex act is never drawn. "sexy" is not one; "no sex" is a refusal.
+_SEX_ACT = re.compile(
+    r"\b(?:sex|fucks?|fucking|fucked|orgasms?|orgasming|intercourse)\b",
+    re.IGNORECASE,
+)
+
+
+def asks_for_sex_act(text: str) -> bool:
+    """True when his words ask for a sex act. That picture is not drawn."""
+    if not isinstance(text, str):
+        return False
+    asked = False
+    for match in _SEX_ACT.finditer(text):
         if _NUDITY_REFUSED.search(text[max(0, match.start() - 60) : match.start()]):
             return False
         asked = True

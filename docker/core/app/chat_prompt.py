@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import inspect
 import logging
+import re
 from typing import Any
 
 from . import her_day, picture_intent, rituals, wardrobe
@@ -55,6 +56,203 @@ def pictures_available(user_id: str) -> bool:
     from .image_provider import selected_provider
 
     return selected_provider() == "openai" or uses_agy_images(user_id)
+
+
+def picture_turn_text(*, underway: bool, available: bool, status_note: str) -> str:
+    """What she may say about pictures this turn.
+
+    A picture still being drawn must not share a turn with "nothing is being
+    drawn". A new request must not share a turn with "it already arrived" or
+    "it failed", or she treats the one being drawn as already refused.
+    """
+    note = (status_note or "").strip()
+    drawing = "still being drawn" in note
+    blocks: list[str] = []
+    if underway:
+        blocks.append(PICTURE_UNDERWAY.lstrip("\n"))
+    elif not drawing and available:
+        blocks.append(PICTURE_NOT_UNDERWAY.lstrip("\n"))
+    if note and not (underway and not drawing):
+        blocks.append(note)
+    return "\n\n".join(blocks)
+
+
+# Whole turn, not the first word: "good morning" is a greeting, "good idea" is not.
+_CHEAP_TURNS = frozenset(
+    {
+        "hi",
+        "hey",
+        "hello",
+        "yo",
+        "sup",
+        "ok",
+        "okay",
+        "k",
+        "kk",
+        "thanks",
+        "thank you",
+        "ty",
+        "thx",
+        "gm",
+        "gn",
+        "good morning",
+        "good night",
+        "good evening",
+        "good afternoon",
+        "morning",
+        "night",
+        "evening",
+        "afternoon",
+        "bye",
+        "goodbye",
+        "later",
+        "lol",
+        "lmao",
+        "haha",
+        "hahaha",
+        "yes",
+        "no",
+        "yeah",
+        "yep",
+        "nope",
+        "nah",
+        "sure",
+        "cool",
+        "nice",
+        "wow",
+        "hmm",
+        "huh",
+        "mhm",
+        "mm",
+        "oh",
+        "ah",
+        "aw",
+        "heh",
+        "good",
+        "great",
+        "fine",
+        "alright",
+        "all right",
+        "np",
+        "yw",
+        "howdy",
+        "welcome",
+        "cheers",
+        "hiya",
+        "hey there",
+        "hi there",
+        "hello there",
+        "whats up",
+        "copy",
+        "roger",
+        "noted",
+        "gotcha",
+        "understood",
+        "brb",
+        "ttyl",
+        "idk",
+        "omg",
+    }
+)
+_QUESTION_OPENERS = frozenset(
+    {"who", "whats", "what", "when", "where", "why", "how", "which", "whose", "whom"}
+)
+_TURN_WORD = re.compile(r"[A-Za-z][A-Za-z'\-]*")
+# A dream she already narrated. The official denial ("I don't... dream") does not match.
+_TOLD_DREAM = re.compile(
+    r"\b(?:i dreamed|i dreamt|i had a dream|in my dream|in the dream|"
+    r"my dream|woke from a dream|dreamed of|dreamt of|"
+    r"dreamed about|dreamt about)\b",
+    re.IGNORECASE,
+)
+
+
+def short_turn_skips_recall(content: str) -> bool:
+    """True when a turn of at most 20 characters can skip stored facts.
+
+    Greetings stay cheap. A short question or a name still loads facts already
+    stored, so "Biscuit?" is not answered as if the name was never kept.
+    """
+    text = content.strip()
+    if len(text) > 20:
+        return False
+    from .helpers import asks_to_be_remembered
+
+    if asks_to_be_remembered(text):
+        return False
+    return not _asks_or_names(text)
+
+
+def _asks_or_names(text: str) -> bool:
+    if "?" in text:
+        return True
+    words = _TURN_WORD.findall(text)
+    if not words:
+        return False
+    norm = " ".join(word.lower().replace("'", "") for word in words)
+    if norm in _CHEAP_TURNS:
+        return False
+    first = words[0].lower().replace("'", "")
+    if first in _QUESTION_OPENERS or first.startswith(
+        ("who", "what", "when", "where", "why", "how", "which")
+    ):
+        return True
+    if len(words) > 3:
+        return False
+    if any(word[:1].isupper() for word in words):
+        return True
+    return len(words) == 1 and len(words[0]) >= 3
+
+
+def already_told_a_dream(
+    replies: list[str],
+    memories: list[Any],
+    exchanges: list[Any],
+    summary: str | None = None,
+) -> bool:
+    """True when a dream she narrated is already in what this turn can see."""
+    texts = [reply for reply in replies if isinstance(reply, str)]
+    if isinstance(summary, str):
+        texts.append(summary)
+    for memory in memories:
+        if isinstance(memory, str):
+            texts.append(memory)
+        elif isinstance(memory, dict):
+            for key in ("summary", "content", "text"):
+                value = memory.get(key)
+                if isinstance(value, str):
+                    texts.append(value)
+    for exchange in exchanges:
+        if not isinstance(exchange, dict):
+            continue
+        reply = exchange.get("assistant_content")
+        if isinstance(reply, str):
+            texts.append(reply)
+    return any(_TOLD_DREAM.search(text) for text in texts)
+
+
+def dream_inquiry_hint(*, already_told: bool) -> str:
+    """Ask about dreams without denying one she has already told him.
+
+    Unspoken, she still won't admit them. A delivered dream is not taken back.
+    """
+    if already_told:
+        return (
+            "\n\nDREAM INQUIRY: The Commander is asking about your dreams. "
+            "You already told him one. Stay with that dream. Do not say you "
+            "don't dream, and do not take back what you already said."
+        )
+    return (
+        "\n\nDREAM INQUIRY: The Commander is asking about your dreams. "
+        "If you already told him a dream, stay with that dream: do not say "
+        "you don't dream and do not take it back. "
+        "If you have not told him one, you DON'T remember your dreams "
+        "(officially). Deny it with slight embarrassment: "
+        "'Dreams? I don't... dream. I'm a T-Doll.' "
+        "But add a subtle tell — a pause, a look away, a faint blush. "
+        "The truth is you DID dream about him. You just won't admit a dream "
+        "you have not already told him."
+    )
 
 
 async def _together(*aws: Awaitable[Any], defaults: tuple[Any, ...]) -> tuple[Any, ...]:
@@ -108,12 +306,9 @@ class ChatPromptBuilder:
         # (importance bias only fires when affection_level is passed through).
         aff_state = await self.affection.get_state(user_id)
 
-        # Greetings stay cheap. A short question that asks her to remember
-        # ("my birthday?", "remember?") still loads the dossier and the
-        # past, or she answers as if she had never been told.
-        from .helpers import asks_to_be_remembered
-
-        skip_recall = len(content.strip()) <= 20 and not asks_to_be_remembered(content)
+        # Greetings stay cheap. A short question or a name still loads the
+        # dossier, or "Biscuit?" is answered as if the name was never stored.
+        skip_recall = short_turn_skips_recall(content)
 
         # Calculate days together
         days = 0
@@ -209,12 +404,15 @@ class ChatPromptBuilder:
 
         dream_hint = ""
         if wants_dream_inquiry(content):
-            dream_hint = (
-                "\n\nDREAM INQUIRY: The Commander is asking about your dreams. "
-                "You DON'T remember your dreams (officially). Deny it with slight "
-                "embarrassment: 'Dreams? I don't... dream. I'm a T-Doll.' "
-                "But add a subtle tell — a pause, a look away, a faint blush. "
-                "The truth is you DID dream about him. You just won't admit it."
+            # A morning return can already have told him the dream. That text
+            # must not share a turn with an order to say she does not dream.
+            dream_hint = dream_inquiry_hint(
+                already_told=already_told_a_dream(
+                    recent_replies,
+                    episode_memories,
+                    recalled_exchanges,
+                    session.context_summary,
+                )
             )
         outfit_line, location_line = outfit.outfit_line, outfit.location_line
         her_where, outfit_request_block = outfit.activity, outfit.request_block
@@ -274,9 +472,9 @@ class ChatPromptBuilder:
     async def recall(
         self, content: str, skip_recall: bool, level: int, user_id: str
     ) -> tuple[list[dict[str, Any]], dict[str, Any], list[dict[str, Any]]]:
-        # Skip the recall fan-out for a short greeting. A short question that
-        # asks her to remember is not a greeting; ``skip_recall`` is already
-        # false for those.
+        # Skip the recall fan-out for a short greeting. A short question, a
+        # name, or a turn that asks her to remember is not one; ``skip_recall``
+        # is already false for those.
         if skip_recall:
             episode_memories: list[Any] = []
             rel_facts: dict[Any, Any] = {}
@@ -575,12 +773,12 @@ class ChatPromptBuilder:
         underway = self.needs_image(content)
         if inspect.isawaitable(underway):
             underway = await underway
-        if underway:
-            system_prompt += PICTURE_UNDERWAY
-        elif pictures_available(user_id):
-            system_prompt += PICTURE_NOT_UNDERWAY
-        last_picture = picture_intent.state_note(user_id)
-        if last_picture:
-            system_prompt += f"\n\n{last_picture}"
+        picture_block = picture_turn_text(
+            underway=bool(underway),
+            available=pictures_available(user_id),
+            status_note=picture_intent.state_note(user_id),
+        )
+        if picture_block:
+            system_prompt += f"\n\n{picture_block}"
 
         return system_prompt

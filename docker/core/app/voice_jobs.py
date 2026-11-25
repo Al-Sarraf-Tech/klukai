@@ -15,7 +15,7 @@ from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from typing import Any
 
-from .voice_client import post_tts
+from .voice_client import join_wavs, post_tts, speech_chunks
 
 logger = logging.getLogger(__name__)
 _TERMINAL = {"completed", "failed", "cancelled"}
@@ -41,9 +41,19 @@ class _Job:
 
 
 async def _synthesize(payload: dict[str, Any]) -> str:
-    response = await post_tts(payload)
-    response.raise_for_status()
-    return base64.b64encode(response.content).decode("ascii")
+    """Fish audio for one job. A long line is every clip, in order."""
+    text = payload.get("text")
+    chunks = speech_chunks(text) if isinstance(text, str) else []
+    if len(chunks) <= 1:
+        response = await post_tts(payload)
+        response.raise_for_status()
+        return base64.b64encode(response.content).decode("ascii")
+    parts: list[bytes] = []
+    for chunk in chunks:
+        response = await post_tts({**payload, "text": chunk})
+        response.raise_for_status()
+        parts.append(response.content)
+    return base64.b64encode(join_wavs(parts)).decode("ascii")
 
 
 class VoiceJobs:

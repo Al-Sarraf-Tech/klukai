@@ -92,6 +92,13 @@ _PRESENCE_IGNORE_SECONDS = 60
 # so match the prefix rather than the full sentinel.
 _FAILURE_PREFIX = FAILURE_SENTINEL.split(",", 1)[0]
 
+# A new ChatFollowups is built for every message. The extraction queue has to
+# outlive that object, or the previous turn's job starts while he is still
+# replying and two turns spend the ledger at once.
+_TURN_EXTRACT_QUEUE: dict[str, list] = {}
+_TURN_EXTRACT_GEN: dict[str, int] = {}
+_TURN_EXTRACT_RUNNER: dict[str, asyncio.Task] = {}
+
 
 async def _drop_unanswered_turn(
     sid: str, session: SessionState, *, previous: SessionState | None = None
@@ -490,6 +497,9 @@ async def _handle_message(
         COMPACT_THRESHOLD,
         curate=update_curation,
         image_request=image_request,
+        _extract_queue=_TURN_EXTRACT_QUEUE,
+        _extract_gen=_TURN_EXTRACT_GEN,
+        _extract_runner=_TURN_EXTRACT_RUNNER,
     )
     await followups.admit(content, response_text, session, user_id)
 

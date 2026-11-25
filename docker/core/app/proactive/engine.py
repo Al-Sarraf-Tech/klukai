@@ -357,8 +357,13 @@ class ProactiveEngine(
             return False
         return True
 
-    def _can_send(self, *, ignore_unanswered: bool = False) -> bool:
-        now = now_local()
+    def _can_send(
+        self, *, ignore_unanswered: bool = False, now: datetime | None = None
+    ) -> bool:
+        # Callers that already froze their own clock pass it in. Reading
+        # now_local() here would see a different instant and could clear a
+        # goodbye hold the caller still considers active.
+        now = now_local() if now is None else now
 
         # Check mute
         if self._muted_until and now < self._muted_until:
@@ -474,8 +479,9 @@ class ProactiveEngine(
             return
         if self._affection_level < 2:
             return  # Don't challenge a stranger
-        if not self._can_send():
-            return  # Respect mute, quiet hours, and the daily proactive cap
+        now = now_local()
+        if not self._can_send(now=now):
+            return  # Mute, goodbye, quiet hours, the shared cap, an unanswered line
 
         try:
             from ..personality import load_personality
@@ -488,7 +494,9 @@ class ProactiveEngine(
             import random
 
             challenge = random.choice(challenges)
+            # One shared-cap slot. The line stays unanswered until he replies.
             self._proactive_count_today += 1
+            self._last_proactive_answered = False
             await self._on_message_callback(challenge["prompt"])
             logger.info("Daily challenge issued: %s", challenge["type"])
         except Exception as e:

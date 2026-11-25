@@ -22,6 +22,19 @@ logger = logging.getLogger(__name__)
 TAP_REQUEST = "take a picture"
 
 
+def _scene_excerpt(content: str) -> str:
+    """Keep the start and the end of a long turn.
+
+    The scene resolver keeps the latest place. A head-only cut drops the place
+    the turn ends on, and the tap then draws an older situation.
+    """
+    text = str(content)
+    if len(text) <= SCENE_TURN_CHARS:
+        return text
+    half = SCENE_TURN_CHARS // 2
+    return text[:half] + "\n" + text[-half:]
+
+
 async def handle_picture_tap(user_id: str, websocket: WebSocket | None = None) -> bool:
     """Start the current-situation picture. False when the device was retired."""
     key = session_id(user_id)
@@ -39,7 +52,7 @@ async def handle_picture_tap(user_id: str, websocket: WebSocket | None = None) -
             if t.get("role") in {"user", "assistant"}
         ]
     scene_turns = [
-        {"role": t["role"], "content": t["content"][:SCENE_TURN_CHARS]} for t in turns
+        {"role": t["role"], "content": _scene_excerpt(t["content"])} for t in turns
     ]
     chat_ctx = "\n".join(f"{t['role']}: {t['content'][:200]}" for t in turns[-6:])
     ws.track_task(

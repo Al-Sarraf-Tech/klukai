@@ -13,6 +13,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.proactive import ProactiveEngine, ROMANCE_MESSAGES
 
+# The romance gate reads this module's clock. Afternoon, so a send expectation
+# is not refused just because the suite ran inside quiet hours.
+_AFTERNOON = datetime(2026, 5, 17, 14, 0, 0)
+
+
+@pytest.fixture(autouse=True)
+def _afternoon():
+    with patch("app.proactive.events.now_local", return_value=_AFTERNOON):
+        yield
+
 
 def _make_engine(
     affection_level: int = 5,

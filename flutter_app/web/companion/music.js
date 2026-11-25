@@ -5,6 +5,7 @@
 // voice. iOS: start() must run inside a user gesture.
 
 import { SCENES, chordNotes, midiToHz } from "./logic.js?v=dffc356aca84";
+import { resumeWithin } from "./embed.js?v=9a664121";
 
 const LOOKAHEAD_S = 0.25;
 const TICK_MS = 60;
@@ -36,6 +37,9 @@ export function createMusic({
   rand = Math.random,
 } = {}) {
   let ctx = null;
+  // setHidden calls overlap when the tab flips quickly. A late suspend() must
+  // not land after the resume that brought the shared context back.
+  let hiddenGate = Promise.resolve();
   let master, bus, filter, wet, rainGain;
   let timer = null;
   let playing = false;
@@ -181,14 +185,24 @@ export function createMusic({
       master.gain.setTargetAtTime(speaking ? DUCKED : MASTER, ctx.currentTime, speaking ? 0.15 : 0.8);
     },
     /** Page hidden (iOS background): suspend the context, resume on return. */
-    async setHidden(hidden) {
-      if (!ctx) return;
-      if (hidden) { await ctx.suspend(); return; }
-      // The context is shared with her voice, so it must come back even when
-      // the score is off: a clip started on a suspended context never fires
-      // onended, her voice queue jams on it, and she is silent for the session.
-      await ctx.resume();
-      if (playing) nextTime = ctx.currentTime + 0.1; // re-anchor the scheduler
+    setHidden(hidden) {
+      // The score may never have started (embedded, or music off). The shared
+      // context still has to suspend and come back, or her voice stays silent
+      // after the tab was hidden. Calls are queued so an older suspend cannot
+      // finish after a newer resume.
+      const run = hiddenGate.then(async () => {
+        const audio = ctx || context;
+        if (!audio) return;
+        if (hidden) {
+          try { await audio.suspend(); } catch { /* already closed */ }
+          return;
+        }
+        const running = audio.state === "running" || await resumeWithin(audio);
+        if (!running) return;
+        if (playing) nextTime = audio.currentTime + 0.1; // re-anchor the scheduler
+      });
+      hiddenGate = run.then(() => {}, () => {});
+      return run;
     },
     get context() { return ctx; },
   };

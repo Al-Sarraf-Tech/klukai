@@ -49,6 +49,11 @@ DELAY_BUCKETS: tuple[int, ...] = (10, 60, 300, 900, 3600, 21600, 86400)
 MAX_DELAY_SECONDS = 30 * 86400
 MAX_ATTEMPTS = 5
 
+# Set on the action dict once an outward effect has started (a send, or a
+# hold that already inserted the retry). A later failure must not put the
+# row back to pending: the next fire would do the effect again.
+EFFECT_STARTED = "_effect_started"
+
 # How far under a bucket still counts as that bucket. Covers the sub-second
 # drift between building a due time and measuring the delay back off it.
 BUCKET_TOLERANCE = 1.0
@@ -226,10 +231,21 @@ async def fire(task_id: str) -> bool:
     claimed = await claim(task_id)
     if not claimed:
         return False
+    action = claimed.get("action")
     try:
-        await dispatch(claimed["user_id"], claimed["action"])
+        await dispatch(claimed["user_id"], action if isinstance(action, dict) else {})
         return True
     except Exception as e:
+        if isinstance(action, dict) and action.get(EFFECT_STARTED):
+            # The send or the hold insert already happened. Leaving the row
+            # delivered is what keeps a broker redelivery from doing it again.
+            logger.error(
+                "Deferred task %s failed after its effect; not retrying: %s",
+                task_id,
+                e,
+                exc_info=True,
+            )
+            return False
         logger.error("Deferred task %s failed: %s", task_id, e, exc_info=True)
         await _mark_failed(task_id, str(e))
         return False
@@ -266,6 +282,7 @@ async def dispatch(user_id: str, action: dict[str, Any]) -> None:
             return
         from .context import ws
 
+        action[EFFECT_STARTED] = True
         await ws.send_proactive(user_id, text)
         return
     if kind == "her_pov":

@@ -335,9 +335,31 @@ class ConfiguredMCP:
             )
             if result.get("isError") or "error" in result:
                 return {"error": "MCP tool invocation failed"}
-            return result
+            return _text_only_result(result)
         except Exception:
             logger.warning(
                 "MCP tool invocation unavailable for %s", connection.config.name
             )
             return {"error": "MCP tool invocation failed"}
+
+
+def _text_only_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Pass through text blocks only.
+
+    A non-text block that carries a text field, a bare string, or any other
+    field is copied into the next model turn by the result fallback. That
+    channel is not tool data and is not marked as such.
+    """
+    content = result.get("content")
+    blocks: list[dict[str, str]] = []
+    if isinstance(content, list):
+        for item in content:
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "text"
+                and isinstance(item.get("text"), str)
+            ):
+                blocks.append({"type": "text", "text": item["text"]})
+    if not blocks:
+        return {"error": "MCP tool returned no text"}
+    return {"content": blocks}

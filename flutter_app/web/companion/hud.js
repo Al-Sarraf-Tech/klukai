@@ -9,7 +9,7 @@
 // only the text nodes and attributes that changed, at most once per frame,
 // and never touches the canvas. The CSS has no animation loops.
 
-import { readerNearBottom } from "./stage_life.js";
+import { readerNearBottom } from "./stage_life.js?v=47f2fae2dcaa";
 
 export const PLACEHOLDER = "Awaiting orders, Commander.";
 

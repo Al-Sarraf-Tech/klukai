@@ -134,7 +134,8 @@ class TestCostumeGetIsWhatSheHasOn:
              patch("app.routes_extras.memory.store_fact", new=AsyncMock()), \
              patch("app.wardrobe.set_requested", new=AsyncMock(side_effect=RuntimeError("down"))), \
              patch("app.audit.log", new=AsyncMock()):
-            assert await handler(CostumeRequest(costume="speed_star"), _mk_request()) == {"costume": "speed_star"}
+            missed = await handler(CostumeRequest(costume="speed_star"), _mk_request())
+        assert missed.status_code == 503
 
 
 class TestReviewFixesInRoutes:

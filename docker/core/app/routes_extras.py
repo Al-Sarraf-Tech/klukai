@@ -102,6 +102,65 @@ def register_extras(app: FastAPI) -> None:
         milestones = await memory.get_milestones(user_id=user_id)
         return {"milestones": milestones}
 
+    # ── Relationship facts (rel: rows) ─────────────────────────────────────
+    # Correct and forget one fact. Album discard is a different store.
+
+    def _fact_control_error(code: str) -> JSONResponse:
+        if code == "unavailable":
+            return JSONResponse({"error": "Could not update that fact"}, status_code=503)
+        if code == "invalid":
+            return JSONResponse(
+                {"error": "That correction can't be recorded"}, status_code=400
+            )
+        return JSONResponse({"error": "No such fact"}, status_code=404)
+
+    @app.get("/api/facts")
+    async def api_list_facts(request: Request) -> Any:
+        """His relationship facts (the rel: rows), not another user's."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from .memory_facts import FactControlError
+
+        try:
+            facts = await memory.list_relationship_facts(user_id=user_id)
+        except FactControlError as refused:
+            return _fact_control_error(refused.code)
+        return {"facts": facts}
+
+    @app.post("/api/facts/{fact_id}/correction")
+    async def api_correct_fact(fact_id: str, request: Request) -> Any:
+        """Replace one of his facts. The old wording leaves recall."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from .memory_facts import FactControlError
+
+        try:
+            body = await request.json()
+        except Exception:
+            return _fact_control_error("invalid")
+        value = body.get("value") if isinstance(body, dict) else None
+        try:
+            return await memory.correct_relationship_fact(
+                fact_id, value, user_id=user_id
+            )
+        except FactControlError as refused:
+            return _fact_control_error(refused.code)
+
+    @app.post("/api/facts/{fact_id}/forget")
+    async def api_forget_fact(fact_id: str, request: Request) -> Any:
+        """Retire one of his facts from recall. Conversation rows stay."""
+        user_id = await _get_user_id(request)
+        if not user_id:
+            return JSONResponse({"error": "Authentication required"}, status_code=401)
+        from .memory_facts import FactControlError
+
+        try:
+            return await memory.forget_relationship_fact(fact_id, user_id=user_id)
+        except FactControlError as refused:
+            return _fact_control_error(refused.code)
+
     # ── Costume ────────────────────────────────────────────────────────────
 
     @app.get("/api/costume")
@@ -204,12 +263,16 @@ def register_extras(app: FastAPI) -> None:
                 {"error": f"'{oid}' not now.", "decision": outcome.decision},
                 status_code=403,
             )
-        # His favourite (biases her own daily picks) + she wears it today.
-        await memory.store_fact("costume", oid, user_id=user_id)
+        # She wears it today, then it is recorded as his favourite. A failed
+        # wear is not success and does not change the favourite.
         try:
             await wardrobe.set_requested(user_id, oid, aff.level)
         except Exception as e:
             logger.warning("Could not set today's outfit: %s", e)
+            return JSONResponse(
+                {"error": "Could not set today's outfit"}, status_code=503
+            )
+        await memory.store_fact("costume", oid, user_id=user_id)
         try:
             from . import audit
 

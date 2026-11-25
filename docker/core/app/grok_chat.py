@@ -149,24 +149,45 @@ async def iter_events(
 async def iter_text(
     system: str, prompt: str, *, timeout: float = 120.0, role: str = "chat"
 ) -> AsyncIterator[str]:
-    """Yield reply text as it arrives. The last event is not yielded as text.
+    """Yield reply text as it arrives.
 
+    Deltas are the reply. A body whose only frame is ``done`` yields that
+    text once; when deltas already carried it, ``done`` is not yielded again.
     After ``done`` the worker only closes the body. Read it to the end rather
     than returning: an abandoned stream is closed later by GeneratorExit,
     which the breaker treats as neither success nor failure, so a streamed
     half-open probe would never close the breaker.
     """
     finished = False
+    visible = False
+    held: list[str] = []
     async for event in iter_events(system, prompt, timeout=timeout, role=role):
         if finished:
             continue
         if event.get("cancelled") is True:
             raise GrokChatCancelled("cancelled")
         if event.get("type") == "delta" and isinstance(event.get("text"), str):
-            yield event["text"]
+            chunk = event["text"]
+            if not visible:
+                held.append(chunk)
+                if not "".join(held).strip():
+                    continue
+                visible = True
+                for part in held:
+                    yield part
+                held.clear()
+            else:
+                yield chunk
         elif event.get("type") == "done":
-            _turn_from(event, role)
+            turn = _turn_from(event, role)
             finished = True
+            # A non-streaming body has the reply only on this frame. Deltas
+            # already carried it when they were present; don't send it twice.
+            if not visible:
+                visible = True
+                yield turn.text
+    if visible and not finished:
+        raise GrokChatError("Grok chat ended before the reply finished")
 
 
 def _turn_from(data: dict[str, Any], role: str) -> Turn:

@@ -206,6 +206,10 @@ async def stream_text(
     model = str(body["model"])
     acquired = False
     finished = False
+    # Leading whitespace is not a reply. Hold it until a visible character
+    # arrives so a blank stream can still fall back instead of "succeeding".
+    started_visible = False
+    held: list[str] = []
     try:
         try:
             await asyncio.wait_for(gate.acquire(), GATE_WAIT_S)
@@ -274,10 +278,19 @@ async def stream_text(
                                 and isinstance(delta.get("text"), str)
                                 and delta["text"]
                             ):
-                                if first is None:
-                                    first = time.monotonic()
                                 output_chars += len(delta["text"])
-                                yield delta["text"]
+                                if not started_visible:
+                                    held.append(delta["text"])
+                                    if not "".join(held).strip():
+                                        continue
+                                    started_visible = True
+                                    if first is None:
+                                        first = time.monotonic()
+                                    for part in held:
+                                        yield part
+                                    held.clear()
+                                else:
+                                    yield delta["text"]
                         elif kind == "message_delta":
                             _merge_usage(usage, event.get("usage"))
                             finished = True
@@ -290,12 +303,20 @@ async def stream_text(
                             break
                         elif kind == "error":
                             raise AnthropicChatError("Claude stream reported an error")
-                    if first is None:
+                    if not started_visible:
                         if stop == "refusal":
                             first = time.monotonic()
                             yield "I can't help with that request."
                         else:
                             raise AnthropicChatError("Claude returned no text")
+                    elif stop == "max_tokens":
+                        # Thinking shares this budget. A short visible fragment
+                        # cut off here is not a reply to store.
+                        raise AnthropicChatError("Claude stream hit its token limit")
+                    elif not finished:
+                        # Text already went out. Ending here without the
+                        # terminal event must not look like a finished reply.
+                        raise AnthropicChatError("Claude stream ended early")
                 finally:
                     await response.aclose()
         except CircuitOpen as exc:

@@ -332,7 +332,11 @@ class MissionMixin(_EngineBase):
             await self._deliver(self._pick_message(MISSION_REPORTS))
 
     async def _mission_random_event(self) -> None:
-        """Fire contextual mission events using LLM. No hour restrictions."""
+        """Fire contextual mission events using LLM.
+
+        A live mission is not an exemption from mute, a goodbye, quiet hours,
+        the shared cap, or an unanswered line.
+        """
         from ..fact_extractor import generate_mission_update
 
         if not self.mission_active:
@@ -352,7 +356,10 @@ class MissionMixin(_EngineBase):
         ):
             return
 
-        # Guard: check mute
+        # Pass this clock in. A bare _can_send() would read a different instant
+        # and could clear a goodbye this tick still considers active.
+        if not self._can_send(now=now):
+            return
         if self._muted_until and now < self._muted_until:
             return
 
@@ -397,11 +404,18 @@ class MissionMixin(_EngineBase):
                 affection_level=self._affection_level,
             )
 
-            if message and self._on_message_callback:
-                self._random_events_today += 1
-                self._last_random_event = now
-                await self._on_message_callback(message)
-                logger.info("Mission event fired (contextual): %s", message[:60])
+            if not message or not self._on_message_callback:
+                return
+            # The model await can cross quiet hours, a goodbye, or the cap.
+            sent_at = now_local()
+            if not self._can_send(now=sent_at):
+                return
+            self._random_events_today += 1
+            self._proactive_count_today += 1
+            self._last_proactive_answered = False
+            self._last_random_event = sent_at
+            await self._on_message_callback(message)
+            logger.info("Mission event fired (contextual): %s", message[:60])
 
         except Exception as e:
             logger.warning("Mission event generation failed: %s", e)

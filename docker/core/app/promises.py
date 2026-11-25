@@ -18,11 +18,23 @@ from typing import Any
 
 import json
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from .db import get_conn
 
 logger = logging.getLogger(__name__)
+
+# Closing a promise as kept needs more than him bringing it up.
+_KEPT_SENTIMENTS = frozenset({"kept", "confirmed"})
+_ONLY_MENTIONED = re.compile(
+    r"\b(?:i mentioned|we talked about|i was talking about|remember when)\b",
+    re.IGNORECASE,
+)
+_ACTUALLY_DONE = re.compile(
+    r"\b(?:done|did|finished|handled|completed|called|fixed|kept|sent)\b",
+    re.IGNORECASE,
+)
 
 # Sane default when the Commander gives no deadline hint: nudge ~20h later, so
 # a thing promised "tonight" or "tomorrow" gets a check-in the next day without
@@ -206,7 +218,19 @@ async def resolve_promise(
     another's promise (IDOR). Only touches still-open rows (resolved_at IS NULL)
     so a double-resolve is a safe no-op and can't clobber the original timestamp.
     Returns True only if a row was actually updated.
+
+    A reply that only mentions the promise does not keep it. He has to say
+    it was done. An empty reply is left to the caller, which already decided.
     """
+    reply = (response_text or "").strip()
+    if (
+        sentiment in _KEPT_SENTIMENTS
+        and reply
+        and _ONLY_MENTIONED.search(reply)
+        and not _ACTUALLY_DONE.search(reply)
+    ):
+        logger.info("Promise %s not resolved: the reply only mentioned it", promise_id)
+        return False
     try:
         async with get_conn() as conn:
             cur = await conn.execute(

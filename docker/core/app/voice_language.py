@@ -2,9 +2,9 @@
 
 Owner decision 2026-10-19: with the Fish voice she speaks English by default,
 her reply exactly as written. A Commander can choose Japanese instead; then
-the line is translated into her natural Japanese first, through the same LLM
-path chat uses (``router.route(..., interactive=True)`` + ``router.stream``),
-so no new provider is involved.
+the line is translated into her natural Japanese first, on the background
+text path (Haiku at low effort, not interactive chat), so a tap does not pay
+chat xhigh and no new provider is involved.
 
 - The choice lives in ``companion_user_settings`` (migration 240). No row
   means English.
@@ -22,7 +22,7 @@ import re
 
 from . import caches
 from .db import get_conn, get_conn_autocommit
-from .helpers import strip_actions_for_tts, tts_clip
+from .helpers import strip_actions_for_tts
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,8 @@ VOICE_LANGUAGES = ("en", "ja")
 DEFAULT_LANGUAGE = "en"
 
 TRANSLATION_TIMEOUT = 20.0
-_MAX_SPEECH_CHARS = 500
+# Visible reply budget. Background text adds its own thinking headroom.
+_TRANSLATION_MAX_TOKENS = 1024
 
 TRANSLATION_PROMPT = """\
 You are the Japanese voice of Klukai, the T-Doll from Girls' Frontline 2: \
@@ -118,22 +119,22 @@ def _clean(raw: str) -> str | None:
     text = _SQUAD_404.sub("ヨンマルヨン", text)
     if not text or not _JAPANESE.search(text):
         return None
-    return tts_clip(text, _MAX_SPEECH_CHARS)
+    # The whole cleaned line. A 500-character clip here would drop the tail
+    # before Fish ever sees the later sentences.
+    return text
 
 
 async def _ask_llm(text: str) -> str | None:
-    from .context import router
+    """One background translation. Low effort, never the interactive chat route."""
+    from . import background_llm
     from .llm_router import FAILURE_SENTINEL
-    from .models import SessionState
 
-    session = SessionState(conversation_id="voice-translation")
-    config = await router.route(text, session, interactive=True)
-    parts: list[str] = []
-    async for token in router.stream(
-        TRANSLATION_PROMPT, [{"role": "user", "content": text}], config
-    ):
-        parts.append(token)
-    raw = "".join(parts)
+    raw = await background_llm.text(
+        "voice_translation",
+        text,
+        system=TRANSLATION_PROMPT,
+        max_tokens=_TRANSLATION_MAX_TOKENS,
+    )
     if not raw or FAILURE_SENTINEL in raw:
         return None
     return _clean(raw)

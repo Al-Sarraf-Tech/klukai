@@ -140,8 +140,10 @@ class PhysicalStateTracker:
         Only sets state if current state is 'normal' — doesn't override
         mission-related states.
         """
-        state, _, _ = await self._load(user_id)
-        if state != "normal":
+        state, since, _ = await self._load(user_id)
+        # A state past its decay is normal again. Leaving it in the way kept
+        # yesterday's "energized" through the late watch.
+        if state != "normal" and not should_decay(state, since):
             return  # Don't override active states
 
         if 0 <= hour < 6:
@@ -155,7 +157,9 @@ class PhysicalStateTracker:
 
     async def on_long_conversation(self, user_id: str) -> None:
         """Set relaxed state after a long conversation (10+ turns)."""
-        state, _, _ = await self._load(user_id)
+        state, since, _ = await self._load(user_id)
+        if should_decay(state, since):
+            state = "normal"
         if state in ("normal", "cold"):
             await self.set_state(
                 user_id, "relaxed", "at ease — the conversation was good"

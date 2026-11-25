@@ -212,7 +212,8 @@ def build_decision_block(pending: dict[str, Any], key: str) -> str:
         f'COMMAND DECISION: Earlier you asked him: "{pending.get("ask", "")}" '
         f"He chose {key}: {opt['label']}.",
         "Acknowledge his call in character, in one sentence at most, then answer "
-        "the rest of what he said. Don't announce what happens next; it will "
+        "the rest of what he said. That call is closed: do not ask it again or "
+        "leave it open. Don't announce what happens next; it will "
         "happen on its own.",
     ]
     if opt.get("disagree"):
@@ -279,13 +280,20 @@ async def _load_pending(
     if cached and _time.monotonic() - cached[0] < _CACHE_TTL:
         data = cached[1]
     else:
+        # A resolution that lands while this read is in flight must win.
+        # Writing the stale pending back made a closed call look open again.
+        started = _time.monotonic()
         try:
             raw = await memory.recall_fact(PENDING_FACT, user_id=user_id)
         except Exception as e:
             logger.debug("decision:pending recall failed: %s", e)
             raw = None
         data = _parse_pending(raw)
-        _pending_cache[user_id] = (_time.monotonic(), data)
+        current = _pending_cache.get(user_id)
+        if current is not None and current[0] >= started:
+            data = current[1]
+        else:
+            _pending_cache[user_id] = (_time.monotonic(), data)
     if data and now - _asked_at(data) < timedelta(seconds=PENDING_TTL):
         return data
     return None

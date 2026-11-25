@@ -238,6 +238,13 @@ async def night_watch_prompt_block(
     """Per-message entry point. Records tonight if late; returns the block
     inside the watch, otherwise ``""``. Never raises."""
     now = now or now_local()
+    # A UTC stamp (a probe clock, a stored instant) is not his wall clock.
+    # 04:00 UTC is still evening in Chicago; treating it as the watch pages
+    # him while he is up and fine.
+    if now.tzinfo is not None:
+        from .proactive.state import LOCAL_TZ
+
+        now = now.astimezone(LOCAL_TZ).replace(tzinfo=None)
     tonight = night_date(now)
     if tonight is None:
         return ""

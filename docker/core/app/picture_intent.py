@@ -21,6 +21,14 @@ from typing import Any
 from . import extraction_llm
 from .image_prompts import needs_image
 from .image_provider import asks_for_nudity
+
+# A bath is a covered picture. These words are undress, and only his own text may add them.
+_EXPLICIT_UNDRESS = re.compile(
+    r"\b(?:nudes?|nudity|naked|undress(?:ed|ing)?|topless|skinny[- ]dip(?:ping)?)\b",
+    re.IGNORECASE,
+)
+# "nudes" is not the whole word the cover gate looks for. Keep the request.
+_NUDES_WORD = re.compile(r"\bnudes\b", re.IGNORECASE)
 from .image_request_intent import resolve_picture_request
 
 logger = logging.getLogger(__name__)
@@ -30,7 +38,8 @@ logger = logging.getLogger(__name__)
 _CUE = re.compile(
     r"\b(?:draw\w*|drew|drw|darw|sketch\w*|paint\w*|doodl\w*|illustrat\w*|render\w*|"
     r"depict\w*|visuali[sz]\w*|pictures?|pics?|pix|photo\w*|selfies?|snap\w*|shot|"
-    r"images?|portrait\w*|show\w*|see|look\w*|generat\w*|again|another|redo|retry|"
+    r"images?|portrait\w*|show\w*|see|look\w*|wear(?:ing)?|outfits?|nudes?|naked|undress\w*|"
+    r"generat\w*|again|another|redo|retry|"
     r"one more|(?:make|send|give|gimme|take)(?: me| us)? (?:one|it|that|another|some|more))\b",
     re.IGNORECASE,
 )
@@ -51,8 +60,9 @@ draw is true when he:
 photo, send a selfie or picture, or show what she or the two of them look like, in any \
 wording, with typos or slang, after other sentences, or as a polite question ("can you \
 draw it", "could I see you", "what do you look like right now", "what are you wearing \
-right now", "let me see", "show me that", "I want to see you", "don't tell me, show me", \
-"not words, a picture", "send nudes");
+right now", "what do you have on", "what's your outfit", "let me see", "show me that", \
+"I want to see you", "don't tell me, show me", "not words, a picture", "send nudes", \
+"pic pls");
 - says yes to a picture she just offered ("yes", "go ahead", "do it");
 - wants a redo, a change or another after a picture ("try again", "another one", "redo \
 it", "again", "make it brighter", "change it", "same thing").
@@ -62,9 +72,10 @@ draw is false when he:
 dog", "that picture on the wall", "I drew the short straw", "you look tired", "another \
 photo shoot", "take a picture tomorrow");
 - uses those words for something else or as a figure of speech ("draw the curtains", \
-"draw a bath", "draw your sword", "draw on your experience", "paint your nails", "paint \
-a picture of how it was", "show me how it works", "show me what you've got", "see you \
-later", "look at this bug");
+"draw the curtains for me", "draw a bath", "draw your sword", "draw a blank", "draw on \
+your experience", "paint your nails", "paint a picture of how it was", "another photo \
+shoot", "show me how it works", "show me what you've got", "see you later", "look at \
+this bug");
 - wants to meet or be with her at some time, rather than get an image ("I want to see \
 you tonight");
 - only asks whether she is able to draw, or about her art ("can you draw?", "do you \
@@ -134,7 +145,9 @@ def could_be_request(
     last: Mapping[str, object] | None,
 ) -> bool:
     """Whether this message is worth asking Haiku about."""
-    if _CUE.search(content):
+    # A keyword hit still has to be read. Otherwise a false one never meets Haiku,
+    # and a real one she would only catch from the words is skipped when he is quiet.
+    if _CUE.search(content) or needs_image(content):
         return True
     if len(content.split()) > _SHORT_REPLY_WORDS:
         return False
@@ -185,15 +198,21 @@ def _subject(
     if not isinstance(raw, str):
         return ""
     subject = " ".join(raw.split())[:MAX_SUBJECT_CHARS]
-    if asks_for_nudity(subject):
+    explicit = _EXPLICIT_UNDRESS.search(subject)
+    if explicit or asks_for_nudity(subject):
         # Only his own words can ask for it, never her replies or Haiku's.
+        # "Bath" does not let a subject add "naked".
         his_words = [content, str((last or {}).get("request", ""))]
         his_words += [
             str(turn.get("content"))
             for turn in prior_turns[-_TURNS_READ:]
             if turn.get("role") == "user"
         ]
-        if not any(asks_for_nudity(words) for words in his_words):
+        if explicit and not any(_EXPLICIT_UNDRESS.search(words) for words in his_words):
+            return ""
+        if asks_for_nudity(subject) and not any(
+            asks_for_nudity(words) for words in his_words
+        ):
             return ""
     return subject
 
@@ -223,6 +242,19 @@ async def _ask(
     return verdict
 
 
+def _admitted(
+    user_id: str, request: str | None, *, versions: int | None = None
+) -> str | None:
+    """A picture is being taken. The prompt must not still say the last one failed."""
+    if not request:
+        return None
+    request = _NUDES_WORD.sub("nude", request)
+    note_picture(user_id, "drawing", request)
+    if versions is not None:
+        _LAST[user_id]["versions"] = versions
+    return request
+
+
 async def resolve(
     content: str,
     prior_turns: Sequence[Mapping[str, object]],
@@ -236,10 +268,10 @@ async def resolve(
     if not extraction_llm.uses_anthropic() or not could_be_request(
         content, prior_turns, last
     ):
-        return keywords
+        return _admitted(user_id, keywords)
     verdict = await _ask(content, prior_turns, last)
     if verdict is None:
-        return keywords
+        return _admitted(user_id, keywords)
     logger.info("Picture intent: draw=%s", verdict["draw"])
     if not verdict["draw"]:
         return None
@@ -247,10 +279,9 @@ async def resolve(
     subject = _subject(verdict, content, prior_turns, last)
     if subject:
         request = f"{request}\n\nSubject: {subject}"
+    versions = None
     if verdict.get("again") is True:
         # The same words within ten minutes would hand back the same picture.
         versions = (last or {}).get("versions", 0) + 1
         request = f"{request}\n\nNew version {versions + 1}."
-        note_picture(user_id, (last or {}).get("outcome", "drawing"))
-        _LAST[user_id]["versions"] = versions
-    return request
+    return _admitted(user_id, request, versions=versions)

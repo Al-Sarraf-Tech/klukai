@@ -5,6 +5,7 @@ from typing import Any
 
 
 import logging
+import re
 import secrets
 
 from fastapi import FastAPI, Request
@@ -20,6 +21,28 @@ from .api_schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Kept means he finished it. Naming the promise, or sending no reply, does not.
+_ONLY_MENTIONED = re.compile(
+    r"\b(?:i mentioned|we talked about|i was talking about|remember when)\b",
+    re.IGNORECASE,
+)
+_ACTUALLY_DONE = re.compile(
+    r"\b(?:done|did|finished|handled|completed|called|fixed|kept|sent)\b",
+    re.IGNORECASE,
+)
+
+
+def _confirmed_resolution(response_text: object) -> str | None:
+    """What he actually finished, or None when confirmed would close nothing."""
+    if not isinstance(response_text, str):
+        return None
+    reply = response_text.strip()
+    if not reply:
+        return None
+    if _ONLY_MENTIONED.search(reply) and not _ACTUALLY_DONE.search(reply):
+        return None
+    return reply
 
 
 async def _get_user_id(request: Request) -> str | None:
@@ -365,7 +388,7 @@ def register_extras3(app: FastAPI) -> None:
 
     @app.post("/api/promises/{promise_id}/resolve")
     async def api_resolve_promise(promise_id: str, request: Request) -> Any:
-        """Close a promise with a sentiment ('confirmed'|'failed'|'deferred')."""
+        """Close a promise. confirmed needs what he finished, not a mention."""
         user_id = await _get_user_id(request)
         if not user_id:
             return JSONResponse({"error": "Authentication required"}, status_code=401)
@@ -373,16 +396,29 @@ def register_extras3(app: FastAPI) -> None:
             body = await request.json()
         except Exception:
             body = {}
-        sentiment = (body or {}).get("sentiment")
+        if not isinstance(body, dict):
+            body = {}
+        sentiment = body.get("sentiment")
         if sentiment not in {"confirmed", "failed", "deferred"}:
             return JSONResponse(
                 {"error": "sentiment must be one of: confirmed, failed, deferred"},
                 status_code=400,
             )
+        response_text = body.get("response_text")
+        if sentiment == "confirmed":
+            reply = _confirmed_resolution(response_text)
+            if reply is None:
+                return JSONResponse(
+                    {
+                        "error": "confirmed needs what he actually finished, not only a mention"
+                    },
+                    status_code=400,
+                )
+            response_text = reply
         from . import promises
 
         ok = await promises.resolve_promise(
-            promise_id, sentiment, (body or {}).get("response_text"), user_id=user_id
+            promise_id, sentiment, response_text, user_id=user_id
         )
         return {"resolved": ok}
 

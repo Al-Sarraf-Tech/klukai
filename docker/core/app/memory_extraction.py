@@ -10,6 +10,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import logging
+import re
 from typing import Any
 import uuid
 
@@ -28,6 +29,83 @@ from .proactive import ProactiveEngine
 from .ws_manager import WSManager
 
 logger = logging.getLogger(__name__)
+
+# Words long enough to be a claim, not a particle. Her joke is not his fact.
+_CLAIM_WORD = re.compile(r"[^\W_]{3,}")
+# He only brought it up. That is not a new commitment to follow up on.
+_MENTION = re.compile(
+    r"\b(?:i mentioned|we talked about|i was talking about|remember when)\b",
+    re.IGNORECASE,
+)
+_COMMITMENT = re.compile(
+    r"\b(?:i'll|i will|i'm going to|i am going to|i promise|i need to|i have to)\b",
+    re.IGNORECASE,
+)
+
+
+def assistant_only_claim(text: str, user_msg: str, assistant_msg: str) -> bool:
+    """True when the claim's words are in her line and not in his.
+
+    A paraphrase that appears in neither is kept: the model may reword what
+    he said. A joke she invented must not become something he told her.
+    """
+    words = [word.lower() for word in _CLAIM_WORD.findall(text or "")]
+    if not words:
+        return False
+    user = (user_msg or "").lower()
+    assistant = (assistant_msg or "").lower()
+    return any(word in assistant for word in words) and not any(
+        word in user for word in words
+    )
+
+
+def mention_without_commitment(user_msg: str) -> bool:
+    """He referred to a promise. He did not make one."""
+    if _COMMITMENT.search(user_msg or ""):
+        return False
+    return _MENTION.search(user_msg or "") is not None
+
+
+def score_commander_interaction(
+    result: dict[str, Any], user_msg: str, assistant_msg: str
+) -> bool:
+    """Whether this interaction may move his affection.
+
+    A filled-in neutral is not a reading. The extractor sees her reply, so a
+    label or quote that appears in her line and not in his does not score.
+    His own words still can.
+    """
+    if not isinstance(result, dict) or result.get("interaction_defaulted"):
+        return False
+    if not (user_msg or "").strip():
+        return False
+    interaction = result.get("interaction")
+    parts: list[str] = []
+    quote = ""
+    if isinstance(interaction, dict):
+        kind = interaction.get("type")
+        if isinstance(kind, str):
+            parts.append(kind)
+        for key in ("quote", "evidence", "reason"):
+            value = interaction.get(key)
+            if isinstance(value, str) and value.strip():
+                parts.append(value)
+                quote = f"{quote} {value}".strip()
+    elif isinstance(interaction, str) and interaction.strip():
+        parts.append(interaction)
+    else:
+        # Not a phrase of hers. The caller coerces this shape itself.
+        return True
+    if assistant_only_claim(" ".join(parts), user_msg, assistant_msg):
+        return False
+    if quote and assistant_only_claim(quote, user_msg, assistant_msg):
+        return False
+    if quote:
+        words = [word.lower() for word in _CLAIM_WORD.findall(quote)]
+        user = (user_msg or "").lower()
+        if words and not any(word in user for word in words):
+            return False
+    return True
 
 
 @dataclass
@@ -81,25 +159,33 @@ class ExtractionRuntime:
             # result is the extractor's placeholder, not a reading of this
             # turn, so her mood, heart rate and affection stay where they are
             # instead of snapping back to "composed" and a neutral turn.
+            # A filled-in mood is the same kind of placeholder.
             read = not report.outcome.endswith("defaults")
+            trusted_mood = read and not result.get("mood_defaulted")
+            his_score = read and score_commander_interaction(
+                result, user_msg, assistant_msg
+            )
 
             # Update mood in session + persist to PostgreSQL
-            mood = result.get("mood", "composed") if read else session.mood
+            mood = result.get("mood", "composed") if trusted_mood else session.mood
+            if not isinstance(mood, str) or not mood:
+                mood = "composed"
 
             # Mood contagion: nudge Klukai's mood toward user's sentiment.
             # Small effect — the LLM-detected mood is the primary signal; contagion
             # is a one-step bounded adjustment that never jumps more than one register.
+            # Her reply is not his sentiment.
             try:
                 from .character_behaviors import nudge_mood, interaction_to_sentiment
 
                 sentiment = interaction_to_sentiment(result.get("interaction"))
-                if sentiment and read:
+                if sentiment and trusted_mood and his_score:
                     mood = nudge_mood(mood, sentiment)
             except Exception as e:
                 logger.debug("Mood contagion skipped: %s", e)
 
             applied = False
-            if read:
+            if trusted_mood:
                 try:
                     # Keeps the stale-revision guard: False when a newer turn exists.
                     applied = await self.apply_state(session, mood, user_id)
@@ -109,7 +195,7 @@ class ExtractionRuntime:
                     logger.warning("Mood state not applied (%s)", type(e).__name__)
             await self.send_heartbeat(result, mood, user_id, applied, report)
 
-            if read:
+            if his_score:
                 await self.adjust_affection(result, mood, user_id, applied)
 
             # Her journal entry goes to THIS turn's picture: the explicit memory
@@ -129,7 +215,7 @@ class ExtractionRuntime:
                 elif picture is not None:
                     await picture.curation_ready(curation, aff_state_bg.level)
 
-            await self.store_facts(result, user_id)
+            await self.store_facts(result, user_id, user_msg, assistant_msg)
 
             # Record "firsts" for anniversary tracking (scoped to user)
             if session.turn_count == 1:
@@ -143,7 +229,9 @@ class ExtractionRuntime:
 
                 await physical.on_long_conversation(user_id)
 
-            await self.store_commitments(user_msg, aff_state_bg.level, user_id)
+            await self.store_commitments(
+                user_msg, aff_state_bg.level, user_id, assistant_msg
+            )
 
             await self.store_exchange(
                 result, mood, user_msg, assistant_msg, session, user_id
@@ -196,7 +284,13 @@ class ExtractionRuntime:
         except Exception as e:
             logger.warning("Heartbeat frame failed: %s", type(e).__name__)
 
-    async def store_facts(self, result: dict[str, Any], user_id: str) -> None:
+    async def store_facts(
+        self,
+        result: dict[str, Any],
+        user_id: str,
+        user_msg: str = "",
+        assistant_msg: str = "",
+    ) -> None:
         # Store new facts (scoped to user). LLM output is untrusted — skip any
         # non-dict / non-string entries instead of TypeError-ing the whole
         # extraction (which would also skip mood, affection, and exchange store).
@@ -213,6 +307,9 @@ class ExtractionRuntime:
                     continue
                 if not key or not value:
                     continue
+                if assistant_only_claim(f"{key} {value}", user_msg, assistant_msg):
+                    logger.info("Skipped a fact that only her line stated")
+                    continue
                 await self.memory.set_relationship_fact(key, value, user_id=user_id)
         except Exception as e:
             logger.warning("Fact storage failed (continuing extraction): %s", e)
@@ -222,6 +319,9 @@ class ExtractionRuntime:
         if isinstance(commander_details, dict):
             for detail_key, detail_val in commander_details.items():
                 if detail_val and isinstance(detail_val, str):
+                    if assistant_only_claim(detail_val, user_msg, assistant_msg):
+                        logger.info("Skipped a detail that only her line stated")
+                        continue
                     await self.memory.set_relationship_fact(
                         f"commander_{detail_key}", detail_val, user_id=user_id
                     )
@@ -229,9 +329,12 @@ class ExtractionRuntime:
         # Store gift if detected (feature: comfort objects)
         gift_item = result.get("gift_item")
         if gift_item and isinstance(gift_item, str) and len(gift_item) > 1:
-            await self.proactive.store_gift(user_id, gift_item)
-            # Record as a "first" if it's the first gift
-            await self.proactive.record_first(user_id, "first_gift")
+            if assistant_only_claim(gift_item, user_msg, assistant_msg):
+                logger.info("Skipped a gift that only her line stated")
+            else:
+                await self.proactive.store_gift(user_id, gift_item)
+                # Record as a "first" if it's the first gift
+                await self.proactive.record_first(user_id, "first_gift")
 
         # Store inside joke / running reference if detected (feature: inside
         # jokes). Reuses the relationship-fact store under the rel:joke:*
@@ -241,9 +344,18 @@ class ExtractionRuntime:
             jk_label = inside_joke.get("label")
             jk_note = inside_joke.get("note")
             if isinstance(jk_label, str) and isinstance(jk_note, str):
-                await self.memory.set_inside_joke(jk_label, jk_note, user_id=user_id)
+                if assistant_only_claim(
+                    f"{jk_label} {jk_note}", user_msg, assistant_msg
+                ):
+                    logger.info("Skipped a joke that only her line stated")
+                else:
+                    await self.memory.set_inside_joke(
+                        jk_label, jk_note, user_id=user_id
+                    )
 
-    async def store_commitments(self, user_msg: str, level: int, user_id: str) -> None:
+    async def store_commitments(
+        self, user_msg: str, level: int, user_id: str, assistant_msg: str = ""
+    ) -> None:
         # Promises & gentle accountability: detect commitments the Commander
         # makes ("I'll…", "tomorrow I'll…") and schedule a caring follow-up.
         # A separate LLM call (the merged extraction prompt is already large),
@@ -254,7 +366,16 @@ class ExtractionRuntime:
             from . import promises as promises_store
 
             promise_result = await extract_promises(user_msg, level)
+            mentioned = mention_without_commitment(user_msg)
             for commitment in promise_result.get("promises", []):
+                action = (
+                    commitment.get("action") if isinstance(commitment, dict) else ""
+                )
+                if mentioned or assistant_only_claim(
+                    str(action or ""), user_msg, assistant_msg
+                ):
+                    logger.info("Skipped a promise he only mentioned")
+                    continue
                 await promises_store.store_promise(commitment, user_id=user_id)
             upcoming_events = promise_result.get("events") or []
         except Exception as e:

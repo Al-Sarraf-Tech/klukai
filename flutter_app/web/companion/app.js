@@ -6,14 +6,14 @@ import { readToken, clearToken, createApi, AuthExpired, wsUrl, createSocket } fr
 import { moodToExpression, sceneFor, reduceFrame, abandonTurn, avatarCue } from "./logic.js?v=dffc356aca84";
 import { createPortrait } from "./portrait.js?v=7349140c6975";
 import { createAmbience, ambienceKind } from "./ambience.js?v=7d337578ffe9";
-import { createMusic } from "./music.js?v=fdca918f8cd4";
-import { createVoice } from "./voice.js?v=60ff20a04729";
+import { createMusic } from "./music.js?v=49ab0e83191f";
+import { createVoice } from "./voice.js?v=8af47a04a456";
 import { createStageAppearance } from "./stage_appearance.js?v=863beed517d1";
 import {
   applySubtitle, completedAnnouncement, clearDecorativeMotion, motionPreference,
-  beginWake, portraitStatusNotice,
-} from "./stage_life.js";
-import { createHud, hudView, nextVoicePhase } from "./hud.js?v=9b4b16656ea9";
+  beginWake, portraitStatusNotice, portraitRetryMs,
+} from "./stage_life.js?v=47f2fae2dcaa";
+import { createHud, hudView, nextVoicePhase } from "./hud.js?v=6ba145bebf2e";
 import {
   embedConfig, speakRequest, visibilityRequest, hudUpdate, HERDAY, stageActivity, createSpeakGate, resumeWithin, postToParent,
 } from "./embed.js?v=9a664121";
@@ -250,13 +250,17 @@ function boot() {
     portrait.setFrames(p.frames || {}, { pending: !portraitHasFrames });
     applyMood();
     const portraitNote = portraitStatusNotice(p.status, { hasFrames: portraitHasFrames });
+    const retryMs = portraitRetryMs(p.status, { pollMs: PORTRAIT_POLL_MS });
     if (p.status === "pending" || p.status === "partial") {
-      portraitTimer = setTimeout(refreshPortrait, PORTRAIT_POLL_MS);
+      portraitTimer = setTimeout(refreshPortrait, retryMs);
       // Only while she has no portrait at all; once the base exists the
       // remaining expression frames fill in silently.
       notice(portraitNote, 0);
     } else if (p.status === "unavailable") {
+      // The host being away is not permanent. Without this poll the fallback
+      // portrait stays up until a reload or an outfit frame.
       notice(portraitNote, 6000);
+      portraitTimer = setTimeout(refreshPortrait, retryMs);
     } else {
       notice("");
     }

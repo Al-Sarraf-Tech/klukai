@@ -66,20 +66,20 @@ SCENES: tuple[Scene, ...] = (
     ),
     _scene(
         "swim",
-        "swim, swimming, swimsuit, bikini, pool, poolside, surf, surfing, surfboard, "
+        "swim, swimming, swimsuit, bikini, the pool, poolside, surf, surfing, surfboard, "
         "snorkeling",
         "cerulean_breaker",
     ),
     _scene(
         "beach",
-        "beach, beaches, seaside, seashore, shore, shoreline, boardwalk, coast, sandcastle",
+        "beach, beaches, seaside, seashore, the shore, shoreline, boardwalk, coast, sandcastle",
         "cerulean_breaker",
         "terrace_cover_up",
     ),
     _scene(
         "training",
         "training, gym, workout, work out, working out, exercise, exercising, "
-        "firing range, shooting range, the range, target practice, drills, sparring, pt, "
+        "firing range, shooting range, at the range, target practice, drills, sparring, pt, "
         "jogging, morning run, push-ups, pushups, push ups",
         "range_kit",
     ),
@@ -87,8 +87,7 @@ SCENES: tuple[Scene, ...] = (
         "garage",
         "garage, hangar, workshop, repair, repairs, repairing, fixing the bike, "
         "fix the bike, fixing your bike, working on the bike, working on your bike, "
-        "tuning the bike, bike maintenance, maintenance, mechanic, wrench, oil change, "
-        "engine",
+        "tuning the bike, bike maintenance, mechanic, wrench, oil change",
         "hangar_coveralls",
     ),
     _scene(
@@ -100,7 +99,7 @@ SCENES: tuple[Scene, ...] = (
     _scene(
         "formal",
         "gala, ballroom, banquet, black tie, black-tie, formal, formal dinner, "
-        "fancy dinner, fancy restaurant, opera, commission, reception, cocktail party",
+        "fancy dinner, fancy restaurant, opera, reception, cocktail party",
         "formal_commission",
         "dress_uniform",
     ),
@@ -151,7 +150,7 @@ SCENES: tuple[Scene, ...] = (
     ),
     _scene(
         "date",
-        "date, date night, first date, movie, movies, cinema, movie theater",
+        "a date, date night, first date, movie, movies, cinema, movie theater",
         "cat_cafe_date",
         "off_duty_cap",
     ),
@@ -188,6 +187,16 @@ def _normalize(text: str) -> str:
     return " ".join(text.lower().replace("’", "'").split())
 
 
+# "formal complaint" is paperwork, not a gown. A real formal scene in the
+# same sentence ("formal complaint at the gala") still wins.
+_NOT_FORMAL = re.compile(
+    r"\bformal\s+(?:complaint|report|notice|warning|request|application)\b"
+)
+_REAL_FORMAL = re.compile(
+    r"\b(?:gala|ballroom|banquet|dinner|opera|reception|cocktail|black-tie|black tie)\b"
+)
+
+
 def scene_of(text: str | None) -> str | None:
     """The scene ``text`` clearly sets (first by priority), or None."""
     if not text:
@@ -195,6 +204,12 @@ def scene_of(text: str | None) -> str | None:
     lower = _normalize(text)
     for scene, pattern in _PATTERNS:
         if pattern.search(lower):
+            if (
+                scene.key == "formal"
+                and _NOT_FORMAL.search(lower)
+                and not _REAL_FORMAL.search(lower)
+            ):
+                continue
             return scene.key
     return None
 

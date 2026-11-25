@@ -30,24 +30,29 @@ async def store_message(
     content: str,
     model: str = "",
     latency_ms: int | None = None,
-    user_id: str = "jalsarraf",
+    user_id: str | None = None,
 ) -> bool:
     """Store a message and update conversation turn count atomically.
 
     Returns True when the message was persisted, False on DB failure so the
     chat path can warn the Commander instead of silently losing the message.
+    A missing user id is refused: the row must not be filed under anyone else.
     """
     import logging
     from .db import get_conn
 
     logger = logging.getLogger(__name__)
+    owner = user_id.strip() if isinstance(user_id, str) else ""
+    if not owner:
+        logger.error("Refusing to store a message without a user id")
+        return False
     try:
         async with get_conn() as conn:
             await conn.execute(
                 "INSERT INTO companion_messages "
                 "(conversation_id, role, content, model, latency_ms, user_id) "
                 "VALUES (%s, %s, %s, %s, %s, %s)",
-                (conversation_id, role, content, model, latency_ms, user_id),
+                (conversation_id, role, content, model, latency_ms, owner),
             )
             await conn.execute(
                 "UPDATE companion_conversations SET turn_count = turn_count + 1, "

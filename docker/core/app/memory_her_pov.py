@@ -89,9 +89,19 @@ def _prune_jobs_locked(now: float | None = None) -> None:
             _JOBS.pop(jid, None)
 
 
+_TERMINAL = frozenset({"done", "failed"})
+
+
 async def _set_job(job_id: str, **fields: Any) -> None:
     async with _JOBS_LOCK:
         job = _JOBS.setdefault(job_id, {"id": job_id})
+        current = job.get("status")
+        new_status = fields.get("status")
+        # A late phase update must not walk a finished portrait back to
+        # "searching". That leaves the archive row and the chat thread
+        # disagreeing about whether the moment was kept.
+        if current in _TERMINAL and new_status != current:
+            return
         job.update(fields)
         job["updated_at"] = _now_iso()
         job["_touched"] = time.monotonic()
@@ -335,7 +345,10 @@ async def _start_inline(user_id: str, job_id: str) -> dict[str, Any]:
                 _ACTIVE_JOB_BY_USER.pop(user_id, None)
         raise
     try:
-        _ws.track_task(user_id, task)
+        # A disconnect must not cancel the archive write. Cancelling it
+        # mid-insert leaves the picture on disk and the chat thread without
+        # the row, and the next turn then recalls a moment that is not there.
+        _ws.track_task(user_id, task, survive_disconnect=True)
     except Exception:
         pass
     return {"job_id": job_id, "status": "queued", "reused": False}

@@ -230,13 +230,20 @@ COUNTER_WINDOWS: dict[str, str] = {
 }
 
 
+def _entitled_features(sub: Subscription) -> dict[str, Any]:
+    """Free caps unless the row is active or trialing and unexpired."""
+    if sub.is_active:
+        return sub.features
+    return TIER_FEATURES["free"]
+
+
 async def check_quota(user_id: str, counter: str) -> tuple[int, int | None]:
     """Return (used, limit). limit=None means unlimited.
 
     Does NOT increment — call consume_quota for the atomic check+increment.
     """
     sub = await get_subscription(user_id)
-    limit = sub.features.get(counter)
+    limit = _entitled_features(sub).get(counter)
     window = COUNTER_WINDOWS.get(counter, "daily")
     period = _period_key(window)
     used = 0
@@ -262,9 +269,14 @@ async def consume_quota(user_id: str, counter: str, amount: int = 1) -> int:
     Returns remaining quota (or a large int if unlimited).
 
     Personal mode: bypasses limits entirely, records usage for analytics.
+    A failed counter write does not admit the request: the caller would
+    treat a returned remainder as success and skip the tier cap.
     """
+    if amount < 1:
+        # A negative amount would subtract from the counter and mint quota.
+        raise QuotaExceeded(counter, "free", 0)
     sub = await get_subscription(user_id)
-    limit = sub.features.get(counter)
+    limit = _entitled_features(sub).get(counter)
     if _personal_mode():
         limit = None  # treat as unlimited; still record for telemetry
     window = COUNTER_WINDOWS.get(counter, "daily")
@@ -300,12 +312,22 @@ async def consume_quota(user_id: str, counter: str, amount: int = 1) -> int:
                     (user_id, counter, period, amount),
                 )
             ).fetchone()
-            new_count = int(row[0]) if row else amount
+            if not row:
+                raise QuotaExceeded(
+                    counter, sub.tier if sub.is_active else "free", int(limit)
+                )
+            new_count = int(row[0])
+    except QuotaExceeded:
+        raise
     except Exception as e:
-        logger.warning("Quota consume failed: %s", e)
-        return int(max(limit - amount, 0))
+        logger.warning("Quota consume failed: %s", type(e).__name__)
+        raise QuotaExceeded(
+            counter, sub.tier if sub.is_active else "free", int(limit)
+        ) from None
     if new_count > limit:
-        raise QuotaExceeded(counter, sub.tier, limit)
+        raise QuotaExceeded(
+            counter, sub.tier if sub.is_active else "free", limit
+        )
     return int(max(limit - new_count, 0))
 
 

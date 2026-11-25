@@ -93,7 +93,8 @@ extension _ChatStage on _ChatScreenState {
   ChatMessage? get _latestLine {
     for (var i = _messages.length - 1; i >= 0; i--) {
       final m = _messages[i];
-      if (m.role == 'user') continue;
+      // error- rows are not her line; the stage's ▶ VOICE reads `line`.
+      if (m.role == 'user' || m.id.startsWith('error-')) continue;
       final text = m.content.trim();
       if (text.isEmpty || text == '[IMAGE]') continue;
       return m;
@@ -242,7 +243,14 @@ extension _ChatStage on _ChatScreenState {
         final line = _messages.where(
           (m) => m.role != 'user' && id != null && m.id == '$id',
         );
-        if (line.isNotEmpty) _speakHere(line.last);
+        if (line.isNotEmpty &&
+            lineIsSpeakable(
+              id: line.last.id,
+              content: line.last.content,
+              isStreaming: line.last.isStreaming,
+            )) {
+          _speakHere(line.last);
+        }
       case 'klukai:voice-error':
         if (_stageVoice == VoicePlayState.playing) {
           _update(() => _stageVoice = VoicePlayState.idle);

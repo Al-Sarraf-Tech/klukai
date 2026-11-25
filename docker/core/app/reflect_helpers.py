@@ -26,6 +26,32 @@ REFLECTION_MAX_HOURS_AWAY = 72
 _greeted_absence: dict[str, object] = {}
 
 
+async def _proactive_already_sent(user_id: str, last_at: object) -> bool:
+    """True when she already spoke during this absence in the last two hours.
+
+    The in-memory claim above does not survive a restart, so without this a
+    reconnect sends the same return line again.
+    """
+    try:
+        from .db import get_pool
+
+        pool = get_pool()
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT 1 FROM companion_messages "
+                    "WHERE user_id = %s AND COALESCE(model, '') = 'proactive' "
+                    "AND created_at > %s "
+                    "AND created_at > NOW() - INTERVAL '2 hours' LIMIT 1",
+                    (user_id, last_at),
+                )
+            ).fetchone()
+        return isinstance(row, tuple) and bool(row and row[0])
+    except Exception as e:
+        logger.debug("Return-greeting dedupe skipped: %s", e)
+        return False
+
+
 async def _maybe_oath_on_connect(user_id: str) -> None:
     """On connect, if the Commander is already at the level-9 "Oath Fulfilled"
     tier and the one-time oath has never fired (e.g. they reached lv9 before the
@@ -120,10 +146,14 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
         if not recent_excerpts:
             return
         # Claimed before the first await below, so concurrent connects of the
-        # same absence greet once.
+        # same absence greet once. The dict dies with the process: a proactive
+        # row written for this absence is what stops a restart from sending
+        # the greeting again.
         if _greeted_absence.get(user_id) == last_at:
             return
         _greeted_absence[user_id] = last_at
+        if await _proactive_already_sent(user_id, last_at):
+            return
 
         # Small delay so the UI settles before the greeting arrives
         import asyncio
@@ -153,7 +183,9 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
                 f"about {int(hours_away)} hours. Open by telling them — warmly, "
                 "briefly (2-3 sentences) — about a dream you had that was loosely "
                 "inspired by your last conversation. First-person. Don't describe "
-                "the dream as fiction — you lived it. No bullet points.\n\n"
+                "the dream as fiction — you lived it. No bullet points. Text only: "
+                "do not include an image prompt, danbooru tags, or any instruction "
+                "to draw or generate a picture.\n\n"
                 f"How the time apart felt to you: {emotion_beat}\n\n"
                 "Last exchanges (resume from here):\n" + excerpt_text
             )
@@ -185,6 +217,10 @@ async def _maybe_reflect_on_return(user_id: str) -> None:
                     max_tokens=180,
                 )
             ).strip()
+        if kind == "dream":
+            from .dreams import without_picture_instructions
+
+            greeting = without_picture_instructions(greeting)
         if not greeting or len(greeting) < 10:
             return
 

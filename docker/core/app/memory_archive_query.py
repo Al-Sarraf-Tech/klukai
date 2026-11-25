@@ -26,6 +26,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def _like_contains(term: str) -> str:
+    """``term`` as a literal substring for ILIKE (backslash is the escape)."""
+    literal = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{literal}%"
+
 # Must match the WRITE path in memory_archive.py (and the companion-images volume
 # mount, /images). This was hardcoded to a nonexistent /data/images, so every
 # get_image_bytes() returned None and the memory archive showed no drawings.
@@ -280,23 +286,28 @@ async def recall_memory(
                         await conn.execute(
                             "SELECT id, filename, annotation, category, scene_tags, created_at "
                             "FROM companion_memories "
-                            "WHERE kept = true AND user_id = %s AND %s = ANY(scene_tags) "
+                            "WHERE kept = true AND user_id = %s AND ("
+                            "%s = ANY(scene_tags) OR EXISTS ("
+                            "SELECT 1 FROM unnest(scene_tags) AS tag "
+                            "WHERE lower(tag) = %s)) "
                             "ORDER BY created_at DESC LIMIT 1",
-                            (user_id, term),
+                            (user_id, term, term),
                         )
                     ).fetchall()
                     if rows:
                         return _row_to_dict(rows[0])
 
-                # Fallback: search annotation text
+                # Fallback: search annotation text. Wildcards in the term stay
+                # literal, or "_" and "%" match a different memory.
                 for term in terms:
                     rows = await (
                         await conn.execute(
                             "SELECT id, filename, annotation, category, scene_tags, created_at "
                             "FROM companion_memories "
-                            "WHERE kept = true AND user_id = %s AND annotation ILIKE %s "
+                            "WHERE kept = true AND user_id = %s "
+                            "AND annotation ILIKE %s ESCAPE '\\' "
                             "ORDER BY created_at DESC LIMIT 1",
-                            (user_id, f"%{term}%"),
+                            (user_id, _like_contains(term)),
                         )
                     ).fetchall()
                     if rows:

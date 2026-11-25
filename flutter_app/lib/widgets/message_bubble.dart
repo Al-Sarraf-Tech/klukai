@@ -4,11 +4,39 @@ import 'package:http/http.dart' as http;
 import '../models/message.dart';
 import '../platform/browser.dart';
 import '../services/session_auth.dart';
-import '../theme/hud.dart';
 import '../services/tts_request.dart';
+import '../services/websocket_service.dart';
+import '../theme/hud.dart';
 import 'artwork_view.dart';
 import 'message_content.dart';
 import 'message_footer.dart';
+
+/// Whether his bubble may shrink-wrap to the words.
+///
+/// [IntrinsicWidth] asks every descendant for an intrinsic width. Emphasis,
+/// fences, tables and lists already fail that (they are not plain text). A
+/// bare URL does not: GFM turns it into a button, and a setext underline or
+/// a thematic rule becomes a block control. Those throw while debugging and,
+/// with asserts stripped, report a zero width so his row collapses.
+bool hisLineShrinkWraps(String content) {
+  if (_hisStructure.hasMatch(content)) return false;
+  if (_hisBareLink.hasMatch(content)) return false;
+  if (_hisRule.hasMatch(content)) return false;
+  return true;
+}
+
+final _hisStructure = RegExp(
+  r'[`|#*_~\[\]>]|^\s*([-+]|\d+\.)\s',
+  multiLine: true,
+);
+
+final _hisBareLink = RegExp(r'https?://|www\.', caseSensitive: false);
+
+/// A line that is only a setext underline or a thematic break.
+final _hisRule = RegExp(
+  r'^[ \t]*(?:=+|-+|\*+|_+)[ \t]*$',
+  multiLine: true,
+);
 
 class MessageBubble extends StatefulWidget {
   final ChatMessage message;
@@ -218,10 +246,11 @@ class _MessageBubbleState extends State<MessageBubble>
     );
   }
 
-  bool get _speakable =>
-      !widget.message.isStreaming &&
-      widget.message.content.trim().isNotEmpty &&
-      widget.message.content != '[IMAGE]';
+  bool get _speakable => lineIsSpeakable(
+    id: widget.message.id,
+    content: widget.message.content,
+    isStreaming: widget.message.isStreaming,
+  );
 
   VoicePlayState get _voiceState => _isLoading
       ? VoicePlayState.loading
@@ -326,16 +355,12 @@ class _MessageBubbleState extends State<MessageBubble>
     ),
   );
 
-  /// A line with no markdown structure (and no picture) can shrink-wrap: its
-  /// layout is plain selectable text, which supports intrinsic sizing (tables
-  /// and code blocks scroll, which doesn't).
-  static final _structure = RegExp(
-    r'[`|#*_~\[\]>]|^\s*([-+]|\d+\.)\s',
-    multiLine: true,
-  );
+  /// A line with no picture and no rich markdown can shrink-wrap. See
+  /// [hisLineShrinkWraps]: a button or a block control under [IntrinsicWidth]
+  /// throws in debug and collapses his row where asserts are stripped.
   bool get _plain =>
       widget.message.imageData == null &&
-      !_structure.hasMatch(widget.message.content);
+      hisLineShrinkWraps(widget.message.content);
 
   /// His: a violet outline, right-aligned and as wide as his words, time and
   /// tick underneath.

@@ -41,7 +41,12 @@ class DreamEventsMixin(_EngineBase):
             return
         if self._affection_level < 5:
             return
+        # Quiet hours, mute, goodbye, the shared cap, and an unanswered ping.
+        # The cron is 01:37–04:37, inside quiet hours, so this returns there.
+        # She does not page him with a dream the chat prompt tells her to deny.
         now = self._event_now()
+        if not self._can_send(now=now):
+            return
         if self._muted_until and now < self._muted_until:
             return
         # He said goodnight (or "gotta go"): a dream is still a ping. Let him go.

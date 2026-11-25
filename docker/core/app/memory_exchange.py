@@ -193,8 +193,8 @@ class ExchangeMemoryMixin:
             chosen = memory_recall.ordered(rows, picked, limit)
             return [
                 {
-                    "user_content": row[1] or "",
-                    "assistant_content": row[2] or "",
+                    "user_content": memory_recall.sanitize(row[1] or ""),
+                    "assistant_content": memory_recall.sanitize(row[2] or ""),
                     "topics": list(row[3] or []),
                     "mood": row[4] or "composed",
                     "score": memory_recall.rank_score(position, len(chosen)),

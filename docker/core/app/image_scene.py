@@ -1379,11 +1379,16 @@ def request_tags(request: str, brief: SceneBrief, *, couple: bool = False) -> st
     """
     lower = _normalize(request or "")
     found = [tags for pattern, tags in _REQUEST_KEYWORDS if pattern.search(lower)]
-    for member, member_tags in SQUAD_KEYWORDS.items():
-        if re.search(rf"\b{re.escape(member)}\b", lower):
-            found.append(member_tags)
-            if not couple:
-                found.append("multiple girls")
+    # Callsigns share the picture gate ("g11" is Mechty), not a second name list.
+    from .image_prompts import detect_squad_members
+
+    for member in detect_squad_members(lower):
+        member_tags = SQUAD_KEYWORDS.get(member)
+        if not member_tags:
+            continue
+        found.append(member_tags)
+        if not couple:
+            found.append("multiple girls")
     kept: list[str] = []
     for tag in (t.strip() for chunk in found for t in chunk.split(",")):
         if not tag or tag in kept or tag in _SETTING_TOKENS:

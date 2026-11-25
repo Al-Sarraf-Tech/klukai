@@ -210,52 +210,51 @@ class _MessageContentState extends State<MessageContent> {
           ],
         );
       case 'code':
+        // No horizontal viewport. The transcript sliver's height is unbounded,
+        // and a horizontal viewport there throws (and, with asserts stripped,
+        // feeds the list an infinite row). The fence wraps inside the bubble.
         child = Container(
           color: GFL2Colors.panel,
           padding: const EdgeInsets.all(8),
-          child: SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: SelectableText(
-              token.text,
-              style: _style.copyWith(
-                fontFamily: 'monospace',
-                color: GFL2Colors.primary,
-              ),
+          child: SelectableText(
+            token.text,
+            style: _style.copyWith(
+              fontFamily: 'monospace',
+              color: GFL2Colors.primary,
             ),
           ),
         );
       case 'table':
-        child = SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Table(
-            defaultColumnWidth: const IntrinsicColumnWidth(),
-            border: TableBorder.all(color: GFL2Colors.border),
-            children: [
+        // Same unbounded-height trap as a code fence. The table shrinks to
+        // the bubble instead of scrolling on a horizontal viewport.
+        child = Table(
+          defaultColumnWidth: const IntrinsicColumnWidth(),
+          border: TableBorder.all(color: GFL2Colors.border),
+          children: [
+            TableRow(
+              decoration: const BoxDecoration(color: GFL2Colors.panel),
+              children: [
+                for (final cell in token.header)
+                  Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: _text(
+                      cell,
+                      style: _style.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+              ],
+            ),
+            for (final row in token.rows)
               TableRow(
-                decoration: const BoxDecoration(color: GFL2Colors.panel),
                 children: [
-                  for (final cell in token.header)
+                  for (final cell in row)
                     Padding(
                       padding: const EdgeInsets.all(8),
-                      child: _text(
-                        cell,
-                        style: _style.copyWith(fontWeight: FontWeight.w700),
-                      ),
+                      child: _text(cell),
                     ),
                 ],
               ),
-              for (final row in token.rows)
-                TableRow(
-                  children: [
-                    for (final cell in row)
-                      Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: _text(cell),
-                      ),
-                  ],
-                ),
-            ],
-          ),
+          ],
         );
       default:
         child = _text(token);

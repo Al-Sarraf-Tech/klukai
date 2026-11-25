@@ -198,6 +198,22 @@ class AffectionManager:
 
         Legacy method — prefer apply_classification() with merged extraction.
         """
+        # Her own line, or a turn that produced no reply, is not his affection.
+        # Classifying either one used to move the score on a failed send.
+        user_text = user_message.strip() if isinstance(user_message, str) else ""
+        reply_text = (
+            assistant_message.strip() if isinstance(assistant_message, str) else ""
+        )
+        if not user_text or not reply_text:
+            state = await self.get_state(user_id)
+            return AffectionChange(
+                delta=0,
+                reason="no_turn",
+                new_score=state.score,
+                new_level=state.level,
+                new_level_name=state.level_name,
+                level_changed=False,
+            )
         interaction_type, intensity = await self._classify_interaction(
             user_message, assistant_message
         )
@@ -272,9 +288,13 @@ class AffectionManager:
             delta += bonus
             state.daily_points_earned += bonus
 
-        # Apply delta
+        # Apply delta. The level he was already at is the one his score had
+        # reached, not a stale column: comparing to the column announced a
+        # jump that skipped every level between the two.
         old_score = state.score
-        old_level = state.level
+        old_level = (
+            self._compute_level(old_score)[0] if self._levels else state.level
+        )
         state.score = max(0, min(MAX_SCORE, state.score + delta))
         state.level, state.level_name = self._compute_level(state.score)
 
@@ -387,7 +407,12 @@ class AffectionManager:
         total_decay = max(total_decay, -max_decay)
 
         old_score = state.score
-        old_level = state.level
+        # Same rule as a live turn: the level he was at is the one the score
+        # had reached. The stored column can be a level he never held, and
+        # decay would then log a level-up.
+        old_level = (
+            self._compute_level(old_score)[0] if self._levels else state.level
+        )
         state.score = max(0, state.score + total_decay)
         state.level, state.level_name = self._compute_level(state.score)
         logger.info(

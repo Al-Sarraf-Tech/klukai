@@ -79,7 +79,13 @@ def verify_stripe_signature(
     # position matched.
     matched = False
     for candidate in candidates:
-        if hmac.compare_digest(mac, candidate):
+        try:
+            same = hmac.compare_digest(mac, candidate)
+        except (TypeError, ValueError):
+            # Non-ASCII or a mismatched type used to raise out of verification
+            # (HTTP 500) instead of being a bad signature.
+            continue
+        if same:
             matched = True
     return matched
 
@@ -211,7 +217,13 @@ async def _apply_subscription(event: dict[str, Any]) -> dict[str, Any]:
     items = (obj.get("items") or {}).get("data") or []
     price_id = items[0].get("price", {}).get("id") if items else None
     tier = _stripe_tier_from_price(price_id)
-    status = obj.get("status", "active")
+    # A missing status must not default to active. Only active and trialing
+    # keep a paid tier. Other values stay in the status CHECK as non-paid.
+    status = str(obj.get("status") or "")
+    if status not in {"active", "past_due", "canceled", "paused", "trialing"}:
+        status = "canceled"
+    if status not in {"active", "trialing"}:
+        tier = "free"
     period_start = _stripe_ts(obj.get("current_period_start"))
     period_end = _stripe_ts(obj.get("current_period_end"))
     customer_id = obj.get("customer")

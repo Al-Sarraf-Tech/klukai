@@ -45,12 +45,13 @@ async def publish(event_type: str, data: str = "", **kwargs: Any) -> int:
     """
     if _redis is None:
         return 0
-    event = {"type": event_type, "data": data, **kwargs}
     try:
+        event = {"type": event_type, "data": data, **kwargs}
         received = await get_breaker("redis").call(
             _redis.publish, CHANNEL, json.dumps(event)
         )
+        # Callers on a chat turn do not catch this.
+        return int(received or 0)
     except Exception as e:
         logger.warning("Failed to publish event: %s", e)
         return 0
-    return int(received or 0)

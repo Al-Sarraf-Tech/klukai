@@ -14,6 +14,7 @@ from contextlib import closing, contextmanager
 from datetime import UTC, datetime
 import fcntl
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -104,7 +105,7 @@ def _positive(name: str, default: float) -> float:
         value = float(raw)
     except ValueError:
         return default
-    return value if value > 0 else default
+    return value if math.isfinite(value) and value > 0 else default
 
 
 def rates() -> tuple[float, float, float, float]:
@@ -206,7 +207,9 @@ def daily_cap() -> float:
         value = float(raw)
     except ValueError:
         return 5.0
-    return value if value >= 0 else 5.0
+    if math.isfinite(value) and value >= 0:
+        return value
+    return 5.0
 
 
 def ledger_path() -> Path:
@@ -260,6 +263,7 @@ def record(kind: str, usd: float, now: datetime | None = None) -> float:
     """Append one charge and return today's total, including this charge."""
     if kind not in _KINDS or usd < 0:
         raise ValueError("invalid xai spend")
+    _finite_usd(usd)
     path = ledger_path()
     day = _day(now)
     with _lock(path), closing(_db(path)) as db:
@@ -275,8 +279,15 @@ def record(kind: str, usd: float, now: datetime | None = None) -> float:
     return float(row[0] if row else usd)
 
 
+def _finite_usd(usd: float) -> None:
+    """NaN and Infinity are not charges. An infinite rate settles as NaN and drops the hold."""
+    if isinstance(usd, bool) or not isinstance(usd, (int, float)) or not math.isfinite(usd):
+        raise ValueError("invalid api spend")
+
+
 def capped(now: datetime | None = None) -> bool:
-    return spent_today(now) >= daily_cap()
+    spent = spent_today(now)
+    return not math.isfinite(spent) or spent >= daily_cap()
 
 
 def reserve(kind: str, usd: float, now: datetime | None = None) -> int | None:
@@ -289,6 +300,7 @@ def reserve(kind: str, usd: float, now: datetime | None = None) -> int | None:
     """
     if kind not in _KINDS or usd < 0:
         raise ValueError("invalid api spend")
+    _finite_usd(usd)
     path = ledger_path()
     day = _day(now)
     with _lock(path), closing(_db(path)) as db:
@@ -296,7 +308,8 @@ def reserve(kind: str, usd: float, now: datetime | None = None) -> int | None:
         row = db.execute(
             "SELECT COALESCE(SUM(usd), 0) FROM xai_spend WHERE day = ?", (day,)
         ).fetchone()
-        if float(row[0] if row else 0.0) >= daily_cap():
+        spent = float(row[0] if row else 0.0)
+        if not math.isfinite(spent) or spent >= daily_cap():
             db.execute("ROLLBACK")
             return None
         cursor = db.execute(
@@ -309,11 +322,21 @@ def reserve(kind: str, usd: float, now: datetime | None = None) -> int | None:
 
 
 def try_reserve(kind: str, usd: float) -> tuple[bool, int | None]:
-    """(allowed, hold). A ledger that cannot be written does not block a call,
-    the same as ``record`` failing after one; only a spent cap does."""
+    """(allowed, hold). A ledger that cannot be opened does not block a call.
+
+    A ledger that is already spent does, even when the hold cannot be written.
+    ``record`` failing after a call is unchanged: only a spent cap blocks.
+    """
     try:
         hold = reserve(kind, usd)
     except (OSError, sqlite3.Error):
+        try:
+            # No file means it could not be opened. Do not treat that as spent.
+            blocked = ledger_path().is_file() and capped()
+        except (OSError, sqlite3.Error, ValueError):
+            return True, None
+        if blocked:
+            return False, None
         return True, None
     return hold is not None, hold
 
@@ -332,6 +355,7 @@ def settle(hold: int, usd: float) -> float:
     """Replace a reservation with the real charge; return that day's total."""
     if usd < 0:
         raise ValueError("invalid api spend")
+    _finite_usd(usd)
     path = ledger_path()
     with _lock(path), closing(_db(path)) as db:
         db.execute("BEGIN IMMEDIATE")
