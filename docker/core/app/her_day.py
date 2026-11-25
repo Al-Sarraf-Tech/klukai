@@ -268,9 +268,7 @@ async def her_now(
             block,
             level,
             cat,
-            occasions=wardrobe.spanning_occasions(
-                row.day, now_local().date(), p, bday
-            ),
+            occasions=wardrobe.spanning_occasions(row.day, now_local().date(), p, bday),
         )
         if override == "gaming":
             cfg = overrides.get("gaming") or {}

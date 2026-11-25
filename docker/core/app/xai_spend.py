@@ -281,7 +281,11 @@ def record(kind: str, usd: float, now: datetime | None = None) -> float:
 
 def _finite_usd(usd: float) -> None:
     """NaN and Infinity are not charges. An infinite rate settles as NaN and drops the hold."""
-    if isinstance(usd, bool) or not isinstance(usd, (int, float)) or not math.isfinite(usd):
+    if (
+        isinstance(usd, bool)
+        or not isinstance(usd, (int, float))
+        or not math.isfinite(usd)
+    ):
         raise ValueError("invalid api spend")
 
 

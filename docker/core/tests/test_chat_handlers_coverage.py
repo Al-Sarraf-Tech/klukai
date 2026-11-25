@@ -209,7 +209,9 @@ def _patched_pipeline(
         patch("app.helpers.detect_squad_address", return_value=None),
         patch("app.helpers.detect_jealousy_trigger", return_value=None),
         patch("app.helpers.wants_dream_inquiry", return_value=False),
-        patch("app.rituals.birthday_prompt_block", AsyncMock(return_value=birthday_block)),
+        patch(
+            "app.rituals.birthday_prompt_block", AsyncMock(return_value=birthday_block)
+        ),
         patch("app.image_gen.needs_image", needs_image_fn),
         patch("app.image_gen.detect_squad_members", return_value=[]),
         patch("asyncio.sleep", new=AsyncMock(return_value=None)),
@@ -418,7 +420,9 @@ class TestMissionBranches:
     async def test_mission_start_persists_state(self):
         from app.chat_handlers import _handle_message
 
-        session = _fresh_session(turns=[{"role": "user", "content": "scout the sector"}])
+        session = _fresh_session(
+            turns=[{"role": "user", "content": "scout the sector"}]
+        )
         with _patched_pipeline() as ns:
             with patch("app.chat_handlers._wants_mission_start", return_value=True):
                 await _handle_message("give me updates every 30 minutes", session)
@@ -495,7 +499,9 @@ class TestBackgroundDispatch:
     async def test_recall_request_schedules_background_recall(self):
         from app.chat_handlers import _handle_message
 
-        with _patched_pipeline(stream_tokens=["Remembering."], wants_recall_val=True) as ns:
+        with _patched_pipeline(
+            stream_tokens=["Remembering."], wants_recall_val=True
+        ) as ns:
             await _handle_message("do you remember our first ride", _fresh_session())
             await _drain_tasks()
 
@@ -508,14 +514,17 @@ class TestBackgroundDispatch:
         from app.chat_handlers import _handle_message
 
         with _patched_pipeline(
-            stream_tokens=["Already done."], needs_image_val=True, wants_recall_val=False
+            stream_tokens=["Already done."],
+            needs_image_val=True,
+            wants_recall_val=False,
         ) as ns:
             await _handle_message("draw yourself by the motorcycle", _fresh_session())
             await _drain_tasks()
 
         ns.background_image_gen.assert_awaited_once()
         image_tracks = [
-            call for call in ns.ws.track_task.call_args_list
+            call
+            for call in ns.ws.track_task.call_args_list
             if call.kwargs.get("survive_disconnect") is True
         ]
         assert image_tracks and image_tracks[0].args[0] == "default"
@@ -525,7 +534,9 @@ class TestBackgroundDispatch:
         from app.chat_handlers import _handle_message
 
         with _patched_pipeline(stream_tokens=["A thoughtful reply."]) as ns:
-            await _handle_message("I have been thinking about our future", _fresh_session())
+            await _handle_message(
+                "I have been thinking about our future", _fresh_session()
+            )
             await _drain_tasks()
 
         ns.background_extraction.assert_awaited_once()
@@ -560,7 +571,8 @@ class TestBackgroundDispatch:
 
         # Stream yields the fallback error string -> recall/image branch skipped.
         with _patched_pipeline(
-            stream_tokens=["Communications disrupted, Commander."], wants_recall_val=True
+            stream_tokens=["Communications disrupted, Commander."],
+            wants_recall_val=True,
         ) as ns:
             await _handle_message("do you remember the mission", _fresh_session())
             await _drain_tasks()
@@ -610,15 +622,21 @@ class TestPromptAssembly:
 
     @pytest.mark.asyncio
     async def test_thread_block_only_when_commander_asks_about_it(self):
-        asked = await self._captured_prompt("Can I read the thread? All of it?", aff_level=6)
+        asked = await self._captured_prompt(
+            "Can I read the thread? All of it?", aff_level=6
+        )
         assert "THE THREAD" in asked
         assert "[0200 hours" in asked
-        unrelated = await self._captured_prompt("How was patrol this afternoon?", aff_level=6)
+        unrelated = await self._captured_prompt(
+            "How was patrol this afternoon?", aff_level=6
+        )
         assert "THE THREAD" not in unrelated
 
     @pytest.mark.asyncio
     async def test_gaming_block_only_while_game_active(self):
-        gaming = await self._captured_prompt("gg, one more round", aff_level=3, game_active=True)
+        gaming = await self._captured_prompt(
+            "gg, one more round", aff_level=3, game_active=True
+        )
         assert "GAME IN PROGRESS" in gaming
         assert "Ask if he's winning" in gaming
         idle = await self._captured_prompt("gg, one more round", aff_level=3)
@@ -626,7 +644,9 @@ class TestPromptAssembly:
 
     @pytest.mark.asyncio
     async def test_birthday_block_appended(self):
-        prompt = await self._captured_prompt("morning", birthday_block="COMMANDER'S BIRTHDAY: today")
+        prompt = await self._captured_prompt(
+            "morning", birthday_block="COMMANDER'S BIRTHDAY: today"
+        )
         assert "COMMANDER'S BIRTHDAY: today" in prompt
 
     @pytest.mark.asyncio
@@ -689,9 +709,13 @@ class TestPromptAssembly:
     async def test_warm_session_does_not_reread_the_archive(self):
         from app.chat_handlers import _handle_message
 
-        session = _fresh_session(turns=[{"role": "assistant", "content": "I was waiting."}])
+        session = _fresh_session(
+            turns=[{"role": "assistant", "content": "I was waiting."}]
+        )
         with _patched_pipeline(stream_tokens=["Go on."]) as ns:
-            with patch("app.chat_handlers.load_recent_thread", new=AsyncMock()) as fetch:
+            with patch(
+                "app.chat_handlers.load_recent_thread", new=AsyncMock()
+            ) as fetch:
                 await _handle_message("Tell me what you were waiting for", session)
                 await _drain_tasks()
 
@@ -712,8 +736,12 @@ class TestPromptAssembly:
         first = datetime.now(timezone.utc) - timedelta(days=30)
         with _patched_pipeline(stream_tokens=["Ok."]) as ns:
             ns.aff_state.first_interaction = first
-            with patch("app.chat_handlers.assemble_system_prompt", side_effect=_capture_prompt):
-                await _handle_message("A meaningful long enough message", _fresh_session())
+            with patch(
+                "app.chat_handlers.assemble_system_prompt", side_effect=_capture_prompt
+            ):
+                await _handle_message(
+                    "A meaningful long enough message", _fresh_session()
+                )
                 await _drain_tasks()
 
         # ~30 days elapsed; tolerate clock skew.
@@ -734,8 +762,12 @@ class TestPromptAssembly:
         bad.tzinfo = None  # forces datetime.now() - MagicMock -> TypeError
         with _patched_pipeline(stream_tokens=["Ok."]) as ns:
             ns.aff_state.first_interaction = bad
-            with patch("app.chat_handlers.assemble_system_prompt", side_effect=_capture_prompt):
-                await _handle_message("A meaningful long enough message", _fresh_session())
+            with patch(
+                "app.chat_handlers.assemble_system_prompt", side_effect=_capture_prompt
+            ):
+                await _handle_message(
+                    "A meaningful long enough message", _fresh_session()
+                )
                 await _drain_tasks()
 
         assert captured["days_together"] == 0
@@ -755,8 +787,12 @@ class TestPromptAssembly:
             ns.proactive._mission_timer = MagicMock()
             ns.proactive._mission_timer.mission_description = "scout sector 7"
             ns.proactive.get_mission_timer.return_value = ns.proactive._mission_timer
-            with patch("app.chat_handlers.assemble_system_prompt", side_effect=_capture_prompt):
-                await _handle_message("A meaningful long enough message", _fresh_session())
+            with patch(
+                "app.chat_handlers.assemble_system_prompt", side_effect=_capture_prompt
+            ):
+                await _handle_message(
+                    "A meaningful long enough message", _fresh_session()
+                )
                 await _drain_tasks()
 
         assert captured["mission_description"] == "scout sector 7"
@@ -774,10 +810,13 @@ class TestPromptAssembly:
 
         with _patched_pipeline(stream_tokens=["x"]) as ns:
             ns.router.stream = _stream
-            with patch("app.chat_handlers.router", ns.router), patch(
-                "app.helpers.wants_dream_inquiry", return_value=True
+            with (
+                patch("app.chat_handlers.router", ns.router),
+                patch("app.helpers.wants_dream_inquiry", return_value=True),
             ):
-                await _handle_message("do you ever have dreams about me", _fresh_session())
+                await _handle_message(
+                    "do you ever have dreams about me", _fresh_session()
+                )
                 await _drain_tasks()
 
         assert "DREAM INQUIRY" in captured["sys"]
@@ -796,7 +835,9 @@ class TestPromptAssembly:
         with _patched_pipeline(stream_tokens=["x"], needs_image_val=True) as ns:
             ns.router.stream = _stream
             with patch("app.chat_handlers.router", ns.router):
-                await _handle_message("draw a picture of yourself please", _fresh_session())
+                await _handle_message(
+                    "draw a picture of yourself please", _fresh_session()
+                )
                 await _drain_tasks()
 
         assert "IMAGE GENERATION ACTIVE" in captured["sys"]
@@ -839,8 +880,11 @@ class TestWarmupTimer:
         # but the stream above uses the captured real sleep to yield the loop.
         with _patched_pipeline(provider="anthropic") as ns:
             ns.router.stream = _slow_stream
-            with patch("app.chat_handlers.router", ns.router), patch(
-                "app.chat_handlers.asyncio.sleep", new=AsyncMock(return_value=None)
+            with (
+                patch("app.chat_handlers.router", ns.router),
+                patch(
+                    "app.chat_handlers.asyncio.sleep", new=AsyncMock(return_value=None)
+                ),
             ):
                 await _handle_message("A normal length question here", _fresh_session())
                 await _drain_tasks()
@@ -865,8 +909,9 @@ class TestWarmupTimer:
 
         with _patched_pipeline(provider="anthropic") as ns:
             ns.router.stream = _empty_stream
-            with patch("app.chat_handlers.router", ns.router), patch(
-                "app.chat_handlers.asyncio.sleep", new=_hang
+            with (
+                patch("app.chat_handlers.router", ns.router),
+                patch("app.chat_handlers.asyncio.sleep", new=_hang),
             ):
                 await _handle_message("A normal length question here", _fresh_session())
 
@@ -931,7 +976,9 @@ class TestStreamFailureHandling:
 
         assert seen["user_stored_before_stream"] is True
         # And it is not stored twice.
-        user_stores = [c for c in ns.store_message.call_args_list if c.args[1] == "user"]
+        user_stores = [
+            c for c in ns.store_message.call_args_list if c.args[1] == "user"
+        ]
         assert len(user_stores) == 1
 
     @pytest.mark.asyncio
@@ -943,6 +990,7 @@ class TestStreamFailureHandling:
         from app.llm_router import LLMStreamFailed
 
         with _patched_pipeline() as ns:
+
             async def _stream(system_prompt, messages, config):
                 yield "Partial sentence."
                 raise LLMStreamFailed("upstream died")
@@ -1004,7 +1052,9 @@ class TestNoAnswerTurns:
 
         session = _fresh_session(turns=_prior_exchange(), turn_count=2)
         with _patched_pipeline() as ns:
-            ns.router.route = AsyncMock(side_effect=RuntimeError("No local LLM backend available"))
+            ns.router.route = AsyncMock(
+                side_effect=RuntimeError("No local LLM backend available")
+            )
             result = await _handle_message("Are you there, Klukai?", session)
             await _drain_tasks()
 
@@ -1052,7 +1102,9 @@ class TestNoAnswerTurns:
         from app.llm_router import FAILURE_SENTINEL
 
         session = _fresh_session(turns=_prior_exchange(), turn_count=2)
-        with _patched_pipeline(stream_tokens=[FAILURE_SENTINEL], wants_recall_val=True) as ns:
+        with _patched_pipeline(
+            stream_tokens=[FAILURE_SENTINEL], wants_recall_val=True
+        ) as ns:
             result = await _handle_message("do you remember the mission", session)
             await _drain_tasks()
 
@@ -1082,6 +1134,7 @@ class TestNoAnswerTurns:
 
         session = _fresh_session(turns=_prior_exchange(), turn_count=2)
         with _patched_pipeline() as ns:
+
             async def _stream(system_prompt, messages, config):
                 yield "Partial sentence."
                 raise LLMStreamFailed("upstream died")
@@ -1105,6 +1158,7 @@ class TestNoAnswerTurns:
         from app.llm_router import LLMStreamFailed
 
         with _patched_pipeline() as ns:
+
             async def _stream(system_prompt, messages, config):
                 yield "Partial"
                 raise LLMStreamFailed("upstream died")
@@ -1225,7 +1279,10 @@ class TestHoursSinceLastExchange:
         psycopg3 — see tests/test_sql_bind_guard.py."""
         from datetime import datetime, timezone
 
-        from app.chat_handlers import _PRESENCE_IGNORE_SECONDS, _hours_since_last_exchange
+        from app.chat_handlers import (
+            _PRESENCE_IGNORE_SECONDS,
+            _hours_since_last_exchange,
+        )
 
         cm, conn = self._conn_returning((datetime.now(timezone.utc),))
         with patch("app.db.get_conn", cm):
@@ -1264,9 +1321,7 @@ class TestHoursSinceLastExchange:
 
         from app.chat_handlers import _hours_since_last_exchange
 
-        cm, _ = self._conn_returning(
-            (datetime.now(timezone.utc) + timedelta(hours=2),)
-        )
+        cm, _ = self._conn_returning((datetime.now(timezone.utc) + timedelta(hours=2),))
         with patch("app.db.get_conn", cm):
             assert await _hours_since_last_exchange("claude") == 0.0
 

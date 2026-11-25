@@ -325,9 +325,7 @@ async def consume_quota(user_id: str, counter: str, amount: int = 1) -> int:
             counter, sub.tier if sub.is_active else "free", int(limit)
         ) from None
     if new_count > limit:
-        raise QuotaExceeded(
-            counter, sub.tier if sub.is_active else "free", limit
-        )
+        raise QuotaExceeded(counter, sub.tier if sub.is_active else "free", limit)
     return int(max(limit - new_count, 0))
 
 

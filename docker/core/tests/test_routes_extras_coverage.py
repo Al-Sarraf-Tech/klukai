@@ -406,9 +406,7 @@ class TestMissionConnectedBranch:
                 "app.routes_extras.affection.get_state",
                 new=AsyncMock(return_value=_mk_aff_state()),
             ),
-            patch(
-                "app.routes_extras.spawn", side_effect=discard_task
-            ) as ct,
+            patch("app.routes_extras.spawn", side_effect=discard_task) as ct,
             patch("app.routes_extras.ws", ws_mock),
             patch("app.audit.log", audit_log),
         ):
@@ -888,9 +886,7 @@ class TestBackfillAnnotations:
             patch(
                 "app.routes_extras._get_user_id", new=AsyncMock(return_value="alice")
             ),
-            patch(
-                "app.routes_extras.spawn", side_effect=fake_create_task
-            ),
+            patch("app.routes_extras.spawn", side_effect=fake_create_task),
         ):
             result = await handler(_mk_request())
 

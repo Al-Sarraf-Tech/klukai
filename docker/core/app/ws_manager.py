@@ -130,7 +130,11 @@ class WSManager:
         if owner != user_id:
             if close:
                 await self.disconnect(
-                    user_id, ws, close=True, code=4001, reason="Invalid or expired token"
+                    user_id,
+                    ws,
+                    close=True,
+                    code=4001,
+                    reason="Invalid or expired token",
                 )
             return False
         # Password reset / disconnect can retire membership during the lookup.

@@ -222,7 +222,9 @@ class LLMCompletionsMixin(ABC):
             config.provider = "grok"
             config.model = GROK_MODEL
         persona, turns, turn_state, prompt = split_prompt(system_prompt, messages)
-        cli_prompt = f"{turn_state.strip()}\n\n{prompt}" if turn_state.strip() else prompt
+        cli_prompt = (
+            f"{turn_state.strip()}\n\n{prompt}" if turn_state.strip() else prompt
+        )
         if chat_backend() == "api" and api_key():
             yielded = False
             try:

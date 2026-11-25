@@ -41,9 +41,7 @@ async def _kept(text: str, memory_id: str | None) -> list[tuple[str, bool]]:
         extraction_idle_s=30,
     )
     try:
-        await followups.admit(
-            text, "Noted.", SessionState(conversation_id="c"), "u"
-        )
+        await followups.admit(text, "Noted.", SessionState(conversation_id="c"), "u")
         await asyncio.sleep(0)
         return list(calls)
     finally:

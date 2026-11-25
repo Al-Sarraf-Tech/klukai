@@ -97,9 +97,7 @@ async def save_voice_note(
 
         parts = speech_chunks(strip_actions_for_tts(text), _MAX_TTS_CHARS)
         if not parts:
-            logger.info(
-                "Voice letter for %s had no speakable text — skipped", user_id
-            )
+            logger.info("Voice letter for %s had no speakable text — skipped", user_id)
             return None
         note_id = str(uuid.uuid4())
         filename = f"{note_id}.wav"

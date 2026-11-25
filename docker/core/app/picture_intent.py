@@ -21,6 +21,7 @@ from typing import Any
 from . import extraction_llm
 from .image_prompts import needs_image
 from .image_provider import asks_for_nudity
+from .image_request_intent import resolve_picture_request
 
 # A bath is a covered picture. These words are undress, and only his own text may add them.
 _EXPLICIT_UNDRESS = re.compile(
@@ -29,7 +30,6 @@ _EXPLICIT_UNDRESS = re.compile(
 )
 # "nudes" is not the whole word the cover gate looks for. Keep the request.
 _NUDES_WORD = re.compile(r"\bnudes\b", re.IGNORECASE)
-from .image_request_intent import resolve_picture_request
 
 logger = logging.getLogger(__name__)
 

@@ -16,7 +16,9 @@ _PICTURE = r"(?:pictures?|images?|photos?|photographs?|pics?|selfies?)"
 # "picture frame" is a thing on the wall, not a claim she cannot draw.
 _NOT_FRAME = r"(?!\s+(?:frames?|books?|albums?)\b)"
 _DENIAL = re.compile(
-    r"\bstill no " + _PICTURE + r"\b"
+    r"\bstill no "
+    + _PICTURE
+    + r"\b"
     + r"|\bno (?:image|picture|photo|camera)(?: generation)? tool\b"
     + r"|\b(?:image|picture|photo) (?:tool|generation|generator|service|pipeline|worker)"
     + r" (?:is |was |isn't |is not |has been )?"
@@ -25,12 +27,17 @@ _DENIAL = re.compile(
     + r"am not able to|won't|wont|will not|refus(?:e|es|ing) to)"
     + r" (?:be )?(?:send(?:ing)?|tak(?:e|ing)|mak(?:e|ing)|draw(?:ing)?|"
     + r"generat(?:e|ing)|produc(?:e|ing)|show(?:ing)?) (?:you |him )?"
-    + r"(?:a |an |any |the )?" + _PICTURE + r"\b" + _NOT_FRAME
+    + r"(?:a |an |any |the )?"
+    + _PICTURE
+    + r"\b"
+    + _NOT_FRAME
     + r"|\brendering pipeline\b[^.]{0,48}\b(?:broke|broken|failed|down|unavailable|interference)\b"
     + r"|\b(?:broke|broken|failed|down|unavailable|interference)\b[^.]{0,48}\brendering pipeline\b"
     + r"|\bvisualization (?:failed|is unavailable)\b"
     + r"|\bnothing would reach you\b"
-    + r"|\bno " + _PICTURE + r" (?:is |will be )?(?:coming|available|possible)\b"
+    + r"|\bno "
+    + _PICTURE
+    + r" (?:is |will be )?(?:coming|available|possible)\b"
     + r"|\b(?:the )?pictures? are (?:still )?(?:down|unavailable|offline)\b(?!\s+the\b)"
     + r"|\b(?:can't|cannot|can not) do (?:any )?(?:pictures?|photos?|images?)\b"
     + r"|\bno way to (?:send|take|make|draw|show) (?:you |him )?(?:a |an |any |the )?"

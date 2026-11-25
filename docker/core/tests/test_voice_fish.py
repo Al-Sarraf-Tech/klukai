@@ -90,10 +90,12 @@ class TestFishRequest:
     async def test_payload_headers_and_wav_contract(self, fish):
         clients = _Clients()
         reply = _fish_reply()
-        with patch("app.voice_client.http_request", reply), patch(
-            "httpx.AsyncClient", clients
+        with (
+            patch("app.voice_client.http_request", reply),
+            patch("httpx.AsyncClient", clients),
         ):
-            response = await voice_client.post_tts({"text": "Good evening, Commander.", "language": "en"}
+            response = await voice_client.post_tts(
+                {"text": "Good evening, Commander.", "language": "en"}
             )
 
         assert response.status_code == 200
@@ -127,8 +129,9 @@ class TestFishRequest:
         monkeypatch.setenv("KLUKAI_FISH_MODEL", "s3-mini-free")
         monkeypatch.setenv("KLUKAI_FISH_VOICE_ID", "other-voice")
         reply = _fish_reply()
-        with patch("app.voice_client.http_request", reply), patch(
-            "httpx.AsyncClient", _Clients()
+        with (
+            patch("app.voice_client.http_request", reply),
+            patch("httpx.AsyncClient", _Clients()),
         ):
             await voice_client.post_tts({"text": "hello"})
         assert reply.await_args.kwargs["headers"]["model"] == "s3-mini-free"
@@ -142,8 +145,9 @@ class TestFishRequest:
         payload: dict[str, Any] = {"text": "はい"}
         if given is not None:
             payload["language"] = given
-        with patch("app.voice_client.http_request", reply), patch(
-            "httpx.AsyncClient", _Clients()
+        with (
+            patch("app.voice_client.http_request", reply),
+            patch("httpx.AsyncClient", _Clients()),
         ):
             await voice_client.post_tts(payload)
         assert reply.await_args.kwargs["json"]["language"] == sent
@@ -151,11 +155,11 @@ class TestFishRequest:
     async def test_deadline_is_capped(self, fish):
         reply = _fish_reply()
         clients = _Clients()
-        with patch("app.voice_client.http_request", reply), patch(
-            "httpx.AsyncClient", clients
+        with (
+            patch("app.voice_client.http_request", reply),
+            patch("httpx.AsyncClient", clients),
         ):
-            await voice_client.post_tts({"text": "hello"}, timeout=600.0
-            )
+            await voice_client.post_tts({"text": "hello"}, timeout=600.0)
         assert reply.await_args.kwargs["timeout"] == 60.0
         assert clients.built[0]["timeout"] == 60.0
 
@@ -168,11 +172,14 @@ class TestFishRequest:
             ("KLUKAI_FISH_VOICE_ID", ""),
         ],
     )
-    async def test_missing_configuration_is_refused(self, fish, monkeypatch, name, value):
+    async def test_missing_configuration_is_refused(
+        self, fish, monkeypatch, name, value
+    ):
         monkeypatch.setenv(name, value)
         reply = AsyncMock(side_effect=AssertionError("Fish contacted"))
-        with patch("app.voice_client.http_request", reply), patch(
-            "httpx.AsyncClient", side_effect=AssertionError("client built")
+        with (
+            patch("app.voice_client.http_request", reply),
+            patch("httpx.AsyncClient", side_effect=AssertionError("client built")),
         ):
             response = await voice_client.post_tts({"text": "hi"})
         assert response.status_code == 503
@@ -208,9 +215,10 @@ class TestFishRequest:
     @pytest.mark.parametrize("status", [400, 401, 402, 403, 429, 500, 503])
     async def test_non_200_maps_to_502_without_the_body(self, fish, status):
         upstream = b'{"message": "insufficient balance for account acct_123"}'
-        with patch(
-            "app.voice_client.http_request", _fish_reply(status, upstream)
-        ), patch("httpx.AsyncClient", _Clients()):
+        with (
+            patch("app.voice_client.http_request", _fish_reply(status, upstream)),
+            patch("httpx.AsyncClient", _Clients()),
+        ):
             response = await voice_client.post_tts({"text": "hi"})
         assert response.status_code == 502
         assert response.json() == {"error": "Voice service unavailable"}
@@ -225,16 +233,18 @@ class TestFishRequest:
         ids=["empty", "json", "not-wave"],
     )
     async def test_a_200_that_is_not_wav_is_rejected(self, fish, content):
-        with patch(
-            "app.voice_client.http_request", _fish_reply(200, content)
-        ), patch("httpx.AsyncClient", _Clients()):
+        with (
+            patch("app.voice_client.http_request", _fish_reply(200, content)),
+            patch("httpx.AsyncClient", _Clients()),
+        ):
             with pytest.raises(ValueError, match="Invalid voice audio"):
                 await voice_client.post_tts({"text": "hi"})
 
     async def test_oversized_audio_is_rejected(self, fish, monkeypatch):
         monkeypatch.setattr(voice_client, "MAX_AUDIO_BYTES", len(WAV) - 1)
-        with patch("app.voice_client.http_request", _fish_reply()), patch(
-            "httpx.AsyncClient", _Clients()
+        with (
+            patch("app.voice_client.http_request", _fish_reply()),
+            patch("httpx.AsyncClient", _Clients()),
         ):
             with pytest.raises(ValueError, match="Invalid voice audio"):
                 await voice_client.post_tts({"text": "hi"})
@@ -257,12 +267,12 @@ class TestFishRequest:
             _fish_reply(200, b"not audio"),
             AsyncMock(side_effect=httpx.ConnectError("boom")),
         ):
-            with patch("app.voice_client.http_request", reply), patch(
-                "httpx.AsyncClient", _Clients()
+            with (
+                patch("app.voice_client.http_request", reply),
+                patch("httpx.AsyncClient", _Clients()),
             ):
                 try:
-                    response = await voice_client.post_tts({"text": "hi"}
-                    )
+                    response = await voice_client.post_tts({"text": "hi"})
                 except (ValueError, httpx.HTTPError):
                     continue
                 assert SECRET.encode() not in response.content
@@ -387,12 +397,11 @@ class TestSettingRoutes:
     async def test_login_required(self, method):
         load = AsyncMock(side_effect=AssertionError("read"))
         save = AsyncMock(side_effect=AssertionError("written"))
-        with patch("app.voice_language.load_voice_language", load), patch(
-            "app.voice_language.save_voice_language", save
+        with (
+            patch("app.voice_language.load_voice_language", load),
+            patch("app.voice_language.save_voice_language", save),
         ):
-            response = await self._call(
-                self._app(), method, json={"language": "ja"}
-            )
+            response = await self._call(self._app(), method, json={"language": "ja"})
         assert response.status_code == 401
 
     async def test_get_returns_his_choice(self):
@@ -439,8 +448,9 @@ class TestSettingRoutes:
 
     async def test_database_outage_is_503(self):
         boom = AsyncMock(side_effect=RuntimeError("db down"))
-        with patch("app.voice_language.load_voice_language", boom), patch(
-            "app.voice_language.save_voice_language", boom
+        with (
+            patch("app.voice_language.load_voice_language", boom),
+            patch("app.voice_language.save_voice_language", boom),
         ):
             got = await self._call(
                 self._app(), "GET", headers={"Authorization": "Bearer good"}
@@ -529,7 +539,12 @@ class TestTranslation:
 
     def test_prompt_sets_her_register(self):
         prompt = voice_language.TRANSLATION_PROMPT
-        for needle in ("です/ます", "Elegant, calm and confident", "ヨンマルヨン", "指揮官"):
+        for needle in (
+            "です/ます",
+            "Elegant, calm and confident",
+            "ヨンマルヨン",
+            "指揮官",
+        ):
             assert needle in prompt
 
     async def test_a_replay_is_served_from_cache(self, redis_cache):
@@ -562,7 +577,9 @@ class TestTranslation:
 
         monkeypatch.setattr(caches, "_get", _down)
         with _llm(_Translator()):
-            assert await voice_language.translate_to_japanese("Yes.") == "はい、指揮官。"
+            assert (
+                await voice_language.translate_to_japanese("Yes.") == "はい、指揮官。"
+            )
 
     @pytest.mark.parametrize(
         ("raw", "spoken"),
@@ -635,18 +652,22 @@ class TestApiTts:
                 200, content=WAV, headers={"Content-Type": "audio/wav"}
             )
         )
-        with patch(
-            "app.routes._get_user_id", new=AsyncMock(return_value="claude")
-        ), patch("app.voice_client.post_tts", synth):
+        with (
+            patch("app.routes._get_user_id", new=AsyncMock(return_value="claude")),
+            patch("app.voice_client.post_tts", synth),
+        ):
             result = await handler(TTSRequest(text=text, language=language), _request())
         return result, synth, app
 
     async def test_english_setting_speaks_as_written(self, fish):
-        with patch(
-            "app.voice_language.voice_language_for", AsyncMock(return_value="en")
-        ), patch(
-            "app.voice_language.translate_to_japanese",
-            AsyncMock(side_effect=AssertionError("translated")),
+        with (
+            patch(
+                "app.voice_language.voice_language_for", AsyncMock(return_value="en")
+            ),
+            patch(
+                "app.voice_language.translate_to_japanese",
+                AsyncMock(side_effect=AssertionError("translated")),
+            ),
         ):
             result, synth, _ = await self._speak("(smiles) Good evening, Commander.")
         assert base64.b64decode(result["audio"]) == WAV
@@ -657,9 +678,12 @@ class TestApiTts:
 
     async def test_japanese_setting_translates_first(self, fish):
         translate = AsyncMock(return_value="こんばんは、指揮官。")
-        with patch(
-            "app.voice_language.voice_language_for", AsyncMock(return_value="ja")
-        ) as setting, patch("app.voice_language.translate_to_japanese", translate):
+        with (
+            patch(
+                "app.voice_language.voice_language_for", AsyncMock(return_value="ja")
+            ) as setting,
+            patch("app.voice_language.translate_to_japanese", translate),
+        ):
             result, synth, _ = await self._speak("*bows* Good evening, Commander.")
         setting.assert_awaited_once_with("claude")
         translate.assert_awaited_once_with("Good evening, Commander.")
@@ -670,10 +694,13 @@ class TestApiTts:
         assert "audio" in result
 
     async def test_failed_translation_speaks_english(self, fish):
-        with patch(
-            "app.voice_language.voice_language_for", AsyncMock(return_value="ja")
-        ), patch(
-            "app.voice_language.translate_to_japanese", AsyncMock(return_value=None)
+        with (
+            patch(
+                "app.voice_language.voice_language_for", AsyncMock(return_value="ja")
+            ),
+            patch(
+                "app.voice_language.translate_to_japanese", AsyncMock(return_value=None)
+            ),
         ):
             result, synth, _ = await self._speak("Good evening.")
         assert synth.await_args.args[0] == {"text": "Good evening.", "language": "en"}
@@ -700,13 +727,15 @@ class TestApiTts:
         app.state.voice_jobs.submit = MagicMock(
             return_value={"job_id": "j1", "status": "queued"}
         )
-        with patch(
-            "app.routes._get_user_id", new=AsyncMock(return_value="claude")
-        ), patch(
-            "app.voice_language.voice_language_for", AsyncMock(return_value="ja")
-        ), patch(
-            "app.voice_language.translate_to_japanese",
-            AsyncMock(return_value="はい。"),
+        with (
+            patch("app.routes._get_user_id", new=AsyncMock(return_value="claude")),
+            patch(
+                "app.voice_language.voice_language_for", AsyncMock(return_value="ja")
+            ),
+            patch(
+                "app.voice_language.translate_to_japanese",
+                AsyncMock(return_value="はい。"),
+            ),
         ):
             response = await handler(TTSRequest(text="Yes."), _request())
         assert response.status_code == 202
@@ -718,13 +747,14 @@ class TestApiTts:
         from app.api_schemas import TTSRequest
 
         handler, _ = _route("/api/tts", "POST")
-        with patch(
-            "app.routes._get_user_id", new=AsyncMock(return_value="claude")
-        ), patch(
-            "app.voice_language.voice_language_for", AsyncMock(return_value="en")
-        ), patch(
-            "app.voice_client.http_request", _fish_reply(401, b"bad key")
-        ), patch("httpx.AsyncClient", _Clients()):
+        with (
+            patch("app.routes._get_user_id", new=AsyncMock(return_value="claude")),
+            patch(
+                "app.voice_language.voice_language_for", AsyncMock(return_value="en")
+            ),
+            patch("app.voice_client.http_request", _fish_reply(401, b"bad key")),
+            patch("httpx.AsyncClient", _Clients()),
+        ):
             response = await handler(TTSRequest(text="Hello."), _request())
         assert response.status_code == 502
         assert b"bad key" not in response.body
@@ -734,13 +764,15 @@ class TestApiTts:
 
         monkeypatch.setenv("FISH_API_KEY", "")
         handler, _ = _route("/api/tts", "POST")
-        with patch(
-            "app.routes._get_user_id", new=AsyncMock(return_value="claude")
-        ), patch(
-            "app.voice_language.voice_language_for", AsyncMock(return_value="en")
-        ), patch(
-            "app.voice_client.http_request",
-            AsyncMock(side_effect=AssertionError("Fish contacted")),
+        with (
+            patch("app.routes._get_user_id", new=AsyncMock(return_value="claude")),
+            patch(
+                "app.voice_language.voice_language_for", AsyncMock(return_value="en")
+            ),
+            patch(
+                "app.voice_client.http_request",
+                AsyncMock(side_effect=AssertionError("Fish contacted")),
+            ),
         ):
             response = await handler(TTSRequest(text="Hello."), _request())
         assert response.status_code == 502
@@ -811,8 +843,9 @@ class TestLettersStayText:
         ws.is_connected = MagicMock(return_value=True)
         ws.send = AsyncMock()
         ws.send_proactive = AsyncMock()
-        with patch("app.reflect_helpers.ws", ws), patch(
-            "app.voice_client.post_tts", synth
+        with (
+            patch("app.reflect_helpers.ws", ws),
+            patch("app.voice_client.post_tts", synth),
         ):
             await _deliver_return_greeting(
                 "claude",
@@ -823,9 +856,7 @@ class TestLettersStayText:
                 "reflection",
             )
         synth.assert_not_awaited()
-        ws.send_proactive.assert_awaited_once_with(
-            "claude", "Welcome back, Commander."
-        )
+        ws.send_proactive.assert_awaited_once_with("claude", "Welcome back, Commander.")
         for call in ws.send.await_args_list:
             frame = call.args[1]
             assert frame.get("type") != "voice_letter"
@@ -858,12 +889,16 @@ async def test_health_reports_fish_without_calling_it(fish):
     redis = MagicMock()
     redis.ping = AsyncMock()
     redis.aclose = AsyncMock()
-    with patch("app.routes._get_user_id", new=AsyncMock(return_value="claude")), patch(
-        "app.db.check_health", new=AsyncMock(return_value={"status": "ok"})
-    ), patch("redis.asyncio.from_url", return_value=redis), patch(
-        "app.routes_health._image_subsystems",
-        new=AsyncMock(return_value={"images": {"status": "ok"}}),
-    ), patch("httpx.AsyncClient", _Client):
+    with (
+        patch("app.routes._get_user_id", new=AsyncMock(return_value="claude")),
+        patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})),
+        patch("redis.asyncio.from_url", return_value=redis),
+        patch(
+            "app.routes_health._image_subsystems",
+            new=AsyncMock(return_value={"images": {"status": "ok"}}),
+        ),
+        patch("httpx.AsyncClient", _Client),
+    ):
         result = await handler(_request())
     assert result["subsystems"]["voice"] == {"status": "ok", "backend": "fish"}
     assert not [url for url in probed if "fish.audio" in url or ":8301" in url]
@@ -871,7 +906,11 @@ async def test_health_reports_fish_without_calling_it(fish):
 
 @pytest.mark.parametrize(
     ("name", "value"),
-    [("FISH_API_KEY", ""), ("KLUKAI_FISH_MODEL", "s2.1-pro"), ("KLUKAI_FISH_VOICE_ID", " ")],
+    [
+        ("FISH_API_KEY", ""),
+        ("KLUKAI_FISH_MODEL", "s2.1-pro"),
+        ("KLUKAI_FISH_VOICE_ID", " "),
+    ],
 )
 async def test_health_reports_unconfigured_fish_as_down(fish, monkeypatch, name, value):
     """Every tap would be refused (no key, a paid model, no voice): not "ok"."""
@@ -884,14 +923,20 @@ async def test_health_reports_unconfigured_fish_as_down(fish, monkeypatch, name,
     client.__aenter__ = AsyncMock(return_value=client)
     client.__aexit__ = AsyncMock(return_value=False)
     client.get = AsyncMock(
-        return_value=httpx.Response(200, json={"data": []}, request=httpx.Request("GET", "http://x"))
+        return_value=httpx.Response(
+            200, json={"data": []}, request=httpx.Request("GET", "http://x")
+        )
     )
-    with patch("app.routes._get_user_id", new=AsyncMock(return_value="claude")), patch(
-        "app.db.check_health", new=AsyncMock(return_value={"status": "ok"})
-    ), patch("redis.asyncio.from_url", return_value=redis), patch(
-        "app.routes_health._image_subsystems",
-        new=AsyncMock(return_value={"images": {"status": "ok"}}),
-    ), patch("httpx.AsyncClient", return_value=client):
+    with (
+        patch("app.routes._get_user_id", new=AsyncMock(return_value="claude")),
+        patch("app.db.check_health", new=AsyncMock(return_value={"status": "ok"})),
+        patch("redis.asyncio.from_url", return_value=redis),
+        patch(
+            "app.routes_health._image_subsystems",
+            new=AsyncMock(return_value={"images": {"status": "ok"}}),
+        ),
+        patch("httpx.AsyncClient", return_value=client),
+    ):
         result = await handler(_request())
     assert result["subsystems"]["voice"] == {"status": "down", "backend": "fish"}
     assert result["status"] == "degraded"

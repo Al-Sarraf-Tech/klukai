@@ -107,7 +107,9 @@ def register_extras(app: FastAPI) -> None:
 
     def _fact_control_error(code: str) -> JSONResponse:
         if code == "unavailable":
-            return JSONResponse({"error": "Could not update that fact"}, status_code=503)
+            return JSONResponse(
+                {"error": "Could not update that fact"}, status_code=503
+            )
         if code == "invalid":
             return JSONResponse(
                 {"error": "That correction can't be recorded"}, status_code=400

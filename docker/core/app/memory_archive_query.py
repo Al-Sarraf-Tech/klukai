@@ -32,6 +32,7 @@ def _like_contains(term: str) -> str:
     literal = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     return f"%{literal}%"
 
+
 # Must match the WRITE path in memory_archive.py (and the companion-images volume
 # mount, /images). This was hardcoded to a nonexistent /data/images, so every
 # get_image_bytes() returned None and the memory archive showed no drawings.

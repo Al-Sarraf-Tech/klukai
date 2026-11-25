@@ -49,9 +49,7 @@ _TERM = re.compile(r"[^\W_]+")
 _SPACE = re.compile(r"\s+")
 _ID = re.compile(r"[0-9]{1,4}")
 # A stored summary must not carry the model's scratch pad back into the next prompt.
-_THINK_BLOCK = re.compile(
-    r"(?is)<think\b[^>]*>.*?</think>|<\|think\|>.*?<\|/think\|>"
-)
+_THINK_BLOCK = re.compile(r"(?is)<think\b[^>]*>.*?</think>|<\|think\|>.*?<\|/think\|>")
 _THINK_OPEN = re.compile(r"(?is)<think\b[^>]*>.*|<\|think\|?>.*")
 # Credential shapes only. A memory may say "password" without being one.
 _SECRET = re.compile(

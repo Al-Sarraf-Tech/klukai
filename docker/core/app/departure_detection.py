@@ -307,7 +307,11 @@ def detect_goodbye(message: str) -> GoodbyeKind | None:
         clause = m.group()
         kind = _clause_kind(clause, tail_from - m.start(), rest=text[m.end() :])
         core = [w for w in _WORD.findall(clause) if w not in _ALONE_STRIP]
-        if kind == "leave" and seen_substance and core in (["later"], ["laters"], ["l8r"]):
+        if (
+            kind == "leave"
+            and seen_substance
+            and core in (["later"], ["laters"], ["l8r"])
+        ):
             kind = None
         if core:
             seen_substance = True

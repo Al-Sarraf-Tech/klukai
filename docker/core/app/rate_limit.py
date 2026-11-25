@@ -133,7 +133,9 @@ async def _arm_expiring_window(
         async with get_breaker("redis").protect():
             await r.delete(key)
     except Exception as exc:
-        logger.warning("TTL-less rate limit key could not be cleared: %s", type(exc).__name__)
+        logger.warning(
+            "TTL-less rate limit key could not be cleared: %s", type(exc).__name__
+        )
     return window_seconds, 0
 
 
@@ -176,9 +178,7 @@ async def consume(user_id: str, bucket: str) -> tuple[int, int, Consumption | No
         count, ttl, expires_at = int(count), int(ttl), int(expires_at)
         if ttl < 0:
             # NX left no TTL. Arm one window, or delete, so the counter cannot stick.
-            ttl, expires_at = await _arm_expiring_window(
-                r, key, limit.window_seconds
-            )
+            ttl, expires_at = await _arm_expiring_window(r, key, limit.window_seconds)
         receipt = Consumption(key, expires_at) if expires_at > 0 else None
         if count > limit.requests:
             raise RateLimitExceeded(bucket=bucket, retry_after=max(ttl, 1))

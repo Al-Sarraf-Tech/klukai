@@ -292,9 +292,7 @@ class AffectionManager:
         # reached, not a stale column: comparing to the column announced a
         # jump that skipped every level between the two.
         old_score = state.score
-        old_level = (
-            self._compute_level(old_score)[0] if self._levels else state.level
-        )
+        old_level = self._compute_level(old_score)[0] if self._levels else state.level
         state.score = max(0, min(MAX_SCORE, state.score + delta))
         state.level, state.level_name = self._compute_level(state.score)
 
@@ -410,9 +408,7 @@ class AffectionManager:
         # Same rule as a live turn: the level he was at is the one the score
         # had reached. The stored column can be a level he never held, and
         # decay would then log a level-up.
-        old_level = (
-            self._compute_level(old_score)[0] if self._levels else state.level
-        )
+        old_level = self._compute_level(old_score)[0] if self._levels else state.level
         state.score = max(0, state.score + total_decay)
         state.level, state.level_name = self._compute_level(state.score)
         logger.info(

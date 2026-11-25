@@ -192,7 +192,9 @@ _CLAUSE_SPLIT = re.compile(r"[?.!;—–]\s+|\s+-\s+|,\s+")
 _CLAUSE_LEAD = re.compile(r"^(?:and|then|also|plus|but)\s+")
 _PICTURE_FOLLOWUP = re.compile(
     r"^(?:how about |what about |i (?:want|would like) |i'd like |"
-    r"(?:can|could) i have )" + _PICTURE_ARTICLE + _PICTURE_NOUN
+    r"(?:can|could) i have )"
+    + _PICTURE_ARTICLE
+    + _PICTURE_NOUN
     + r"\b(?!\s+shoots?\b)|"
     r"^(?:another|one more) " + _PICTURE_NOUN + r"\b(?!\s+shoots?\b)"
 )
@@ -301,9 +303,13 @@ def needs_image(message: str) -> bool:
     An opt-out anywhere in the message is conservatively left as text chat.
     A request can follow another sentence. A figure of speech cannot.
     """
-    normalized = " ".join(message.casefold().replace("’", "'").replace("‘", "'").split())
-    if not normalized or _PICTURE_CANCELLATION.search(normalized) or _NOT_NOW.search(
-        normalized
+    normalized = " ".join(
+        message.casefold().replace("’", "'").replace("‘", "'").split()
+    )
+    if (
+        not normalized
+        or _PICTURE_CANCELLATION.search(normalized)
+        or _NOT_NOW.search(normalized)
     ):
         return False
     if _NOT_WORDS.match(normalized) or _DONT_TELL_SHOW.match(normalized):
