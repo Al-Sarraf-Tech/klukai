@@ -222,6 +222,31 @@ class WardrobeGrid extends StatelessWidget {
   }
 }
 
+/// `2026-10-03` → `OCT 03`. A date-only parse is a calendar day; reading it
+/// as UTC midnight shows the previous evening west of Greenwich.
+String wornDayLabel(String day) {
+  final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(day);
+  if (match == null) return day;
+  const months = [
+    'JAN',
+    'FEB',
+    'MAR',
+    'APR',
+    'MAY',
+    'JUN',
+    'JUL',
+    'AUG',
+    'SEP',
+    'OCT',
+    'NOV',
+    'DEC',
+  ];
+  final month = int.tryParse(match[2]!) ?? 0;
+  final d = int.tryParse(match[3]!) ?? 0;
+  if (month < 1 || month > 12 || d < 1 || d > 31) return day;
+  return '${months[month - 1]} ${d.toString().padLeft(2, '0')}';
+}
+
 /// WORN THIS MONTH: one compact row per day, newest first.
 class WornLogList extends StatelessWidget {
   final List<WardrobeLogEntry> entries;
@@ -253,7 +278,7 @@ class WornLogList extends StatelessWidget {
                 SizedBox(
                   width: 52,
                   child: Text(
-                    e.shortDay,
+                    wornDayLabel(e.day),
                     style: TextStyle(
                       color: GFL2Colors.textMuted,
                       fontSize: 10,

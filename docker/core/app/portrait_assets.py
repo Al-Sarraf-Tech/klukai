@@ -1,6 +1,9 @@
 """Portrait file layout, atomic encoding and signed user-scoped asset URLs."""
 
 from __future__ import annotations
+import base64
+import hashlib
+import hmac
 import io
 import os
 from pathlib import Path
@@ -9,6 +12,12 @@ import uuid
 from PIL import Image
 from . import signed_urls
 from .portrait_style import STYLE_VERSION, FRAME_NAMES, _SAFE_ID, SIGN_BUCKET_S
+
+# routes_portrait.FRAME_CACHE. A frame signed on a bucket edge can expire while
+# the browser still holds the image (max-age starts when the image arrives, not
+# when the URL was signed). Keep accepting that signature for one cache window
+# so revalidation does not 403 and blank the expression.
+FRAME_CACHE_S = 1800
 
 
 def portraits_root() -> Path:
@@ -53,10 +62,28 @@ def frame_url(user_id: str, outfit_id: str, frame: str, version: int) -> str:
     return f"/api/portrait/frame/{user_id}/{outfit_id}/{frame}.webp?v={version}&sig={token}"
 
 
+def _mac_matches(sig_part: str, resource: str, user_id: str, exp: int) -> bool:
+    payload = f"{resource}|{user_id or ''}|{exp}".encode("utf-8")
+    expected = hmac.new(signed_urls._secret(), payload, hashlib.sha256).digest()
+    expected_sig = base64.urlsafe_b64encode(expected).rstrip(b"=")
+    # Bytes, not str: compare_digest raises TypeError on non-ASCII text.
+    return hmac.compare_digest(expected_sig, sig_part.encode("utf-8"))
+
+
 def verify_frame(user_id: str, outfit_id: str, frame: str, sig: str) -> bool:
-    return signed_urls.verify(
-        sig, _resource(user_id, outfit_id, frame), user_id=user_id
-    )
+    resource = _resource(user_id, outfit_id, frame)
+    if signed_urls.verify(sig, resource, user_id=user_id):
+        return True
+    # Past exp, but still inside the image cache window. The MAC is unchanged.
+    try:
+        exp_part, sig_part = sig.split(".", 1)
+        exp = int(exp_part)
+    except (ValueError, AttributeError):
+        return False
+    now = signed_urls.time.time()
+    if now <= exp or now > exp + FRAME_CACHE_S:
+        return False
+    return _mac_matches(sig_part, resource, user_id, exp)
 
 
 def _to_webp(png: bytes) -> bytes:

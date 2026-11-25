@@ -118,14 +118,17 @@ class AlbumEventsMixin(_EngineBase):
 
         She reaches back to a real moment from her memory archive and shares a
         short "remember when…" reminiscence in character. Fires once per day max,
-        only once she's bonded (affection >= 4). If the archive is empty she stays
-        silent. On LLM failure she falls back to a generic "back then" template so
-        the message is always natural — never broken grammar, never a verbatim
-        quote of the journal entry.
+        only once she's bonded (affection >= 4), and only when the shared send
+        gate is open. If the archive is empty, or the line cannot be written,
+        she stays silent. She does not announce "remember when".
         """
         if self._memory_recall_delivered_today:
             return
         if self._affection_level < 4:
+            return
+        # Mute, goodbye, quiet hours, the shared cap, and an unanswered line.
+        # Checked before the archive and the model so a blocked send spends neither.
+        if not self._can_send(now=self._event_now()):
             return
         if self._muted_until and self._event_now() < self._muted_until:
             return
@@ -161,38 +164,32 @@ class AlbumEventsMixin(_EngineBase):
         if not annotation:
             return
 
-        # Generic fallbacks reference "that day" / "back then" — never the
-        # verbatim journal text, and grammatical on their own.
-        fallback_lines = self._event_recall_lines()
-
         message = ""
         try:
             from .. import background_llm
 
             prompt = (
                 f"You are Klukai, T-Doll squad leader. The Commander is HUMAN (male). "
-                f"You are NOT an AI. A real memory just surfaced and you want to share it "
-                f"warmly — a quiet 'remember when…' message to the Commander. "
-                f"Recall the MOMENT in your own words (2-3 short sentences). Be tender but "
-                f"composed. Do NOT quote the journal entry verbatim — evoke the feeling of it. "
+                f"You are NOT an AI. A real moment is with you. Write 2-3 short sentences "
+                f"to the Commander that carry its feeling. Do not say you remember, do not "
+                f"say 'remember when', and do not quote the journal. Be tender but composed. "
                 f"Affection {self._affection_level}/9.\n"
-                f"Memory to recall (do not quote directly): {annotation[:200]}\n"
+                f"Moment (do not quote): {annotation[:200]}\n"
                 f"Write ONLY the message. No explanation."
             )
 
             message = await background_llm.text("memory_recall", prompt, max_tokens=160)
         except Exception as e:
-            logger.warning("Memory recall LLM failed, falling back to template: %s", e)
-            message = ""
+            # A failed line is silence. A generic "back then" still announces
+            # the memory, and it spends a ping he did not answer for.
+            logger.warning("Memory recall LLM failed; staying silent: %s", e)
+            return
 
         if not message or not message.strip():
-            message = self._fresh_line(fallback_lines)
+            return
 
-        if self._on_message_callback:
+        if await self._deliver(message.strip()):
             self._memory_recall_delivered_today = True
-            self._proactive_count_today += 1
-            self._last_proactive_answered = False
-            await self._on_message_callback(message)
             logger.info(
                 "Memory recall delivered (aff=%d): %s",
                 self._affection_level,

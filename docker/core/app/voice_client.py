@@ -22,11 +22,13 @@ import json
 import logging
 import math
 import os
+import struct
 from typing import Any
 
 import httpx
 
 from .dependencies import http_request, http_stream
+from .helpers import tts_clip
 from .shared_http import client as http_client, close as close_http_client
 
 MAX_AUDIO_BYTES = 6 * 1024 * 1024
@@ -127,6 +129,83 @@ def _fish_response(status: int, message: str) -> httpx.Response:
 
 def _is_wav(audio: bytes) -> bool:
     return len(audio) > 12 and audio[:4] == b"RIFF" and audio[8:12] == b"WAVE"
+
+
+# Same cap /api/tts tells the client to split on. A longer line is several
+# clips, not one clip with the rest thrown away.
+MAX_TTS_CHARS = 500
+
+
+def speech_chunks(text: str, limit: int = MAX_TTS_CHARS) -> list[str]:
+    """Ordered clips of at most ``limit`` characters, tail included.
+
+    ``tts_clip`` returns only the head. Each later clip is the same cut
+    applied to what that head left behind.
+    """
+    if not isinstance(text, str):
+        return []
+    remaining = text.strip()
+    if not remaining or limit < 1:
+        return [remaining] if remaining else []
+    chunks: list[str] = []
+    while remaining:
+        piece = tts_clip(remaining, limit)
+        if not piece:
+            break
+        chunks.append(piece)
+        nxt = remaining[len(piece) :].lstrip()
+        if not nxt or nxt == remaining:
+            break
+        remaining = nxt
+    return chunks
+
+
+def _wav_pcm(audio: bytes) -> tuple[bytes, bytes] | None:
+    """``(fmt payload, pcm)`` for a simple WAV, else None."""
+    if not _is_wav(audio):
+        return None
+    pos = 12
+    fmt: bytes | None = None
+    end = len(audio)
+    while pos + 8 <= end:
+        kind = audio[pos : pos + 4]
+        size = struct.unpack_from("<I", audio, pos + 4)[0]
+        start = pos + 8
+        if start + size > end:
+            return None
+        payload = audio[start : start + size]
+        if kind == b"fmt ":
+            fmt = payload
+        elif kind == b"data" and fmt:
+            return fmt, payload
+        pos = start + size + (size & 1)
+    return None
+
+
+def _wav_from_pcm(fmt: bytes, pcm: bytes) -> bytes:
+    fmt_chunk = b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    if len(fmt) & 1:
+        fmt_chunk += b"\x00"
+    data_chunk = b"data" + struct.pack("<I", len(pcm)) + pcm
+    if len(pcm) & 1:
+        data_chunk += b"\x00"
+    body = b"WAVE" + fmt_chunk + data_chunk
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def join_wavs(parts: list[bytes]) -> bytes:
+    """One WAV from clips in order. Unreadable bytes are concatenated in order."""
+    if not parts:
+        return b""
+    if len(parts) == 1:
+        return parts[0]
+    parsed = [_wav_pcm(part) for part in parts]
+    if any(item is None for item in parsed):
+        return b"".join(parts)
+    fmt = parsed[0][0]
+    if any(item[0] != fmt for item in parsed):
+        return b"".join(parts)
+    return _wav_from_pcm(fmt, b"".join(item[1] for item in parsed))
 
 
 async def post_tts(

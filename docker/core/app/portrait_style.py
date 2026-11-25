@@ -94,7 +94,10 @@ QUIET_GAP_S = 60  # render only after a minute without a message from him
 QUIET_POLL_S = 5
 QUIET_MAX_WAIT_S = 30 * 60  # then give up; the next GET re-enqueues
 FAILURE_BACKOFF_S = 300
-SIGN_BUCKET_S = 900  # frame URLs are stable for a bucket, valid 15-30 min
+# Stable for one bucket and valid for the next one too (30-60 min). The frame
+# response is cached for 1800s; a shorter signature 403s on revalidation and
+# the expression overlay comes back blank.
+SIGN_BUCKET_S = 1800
 
 # Idle backfill of the other unlocked outfits (opt-in: PORTRAIT_BACKFILL=1).
 BACKFILL_SILENCE_S = 30 * 60

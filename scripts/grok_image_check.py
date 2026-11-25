@@ -14,6 +14,7 @@ import io
 import json
 import logging
 from pathlib import Path
+import re
 import tempfile
 import time
 import uuid
@@ -41,6 +42,45 @@ logger = logging.getLogger(__name__)
 # One argv string must stay under Linux MAX_ARG_STRLEN (131072). A real JPEG
 # pair as --prompt-json exceeds that and raises E2BIG.
 MAX_ARG_STRLEN = 131072
+# A background that merely differs is minor. Kept as major when the same line
+# is also a real defect (a photoreal background, an extra person).
+_BACKGROUND = re.compile(r"\b(?:backgrounds?|settings?|scenery|backdrop|sky)\b", re.I)
+_STILL_MAJOR = re.compile(
+    r"\b(?:photoreal\w*|photographic|3d|semi-realistic|underage|child\w*|"
+    r"watermark|text|letter\w*|deformed|anatomy|fingers?|limbs?|"
+    r"persons?|people|figures?|man|woman|girl|identity|outfit|pose)\b",
+    re.I,
+)
+
+
+def background_only_passes(verdict: dict) -> dict:
+    """Do not reject a picture whose only major note is a different background."""
+    issues = verdict.get("issues")
+    if not isinstance(issues, list):
+        return verdict
+    softened = []
+    changed = False
+    for item in issues:
+        what = item.get("what") if isinstance(item, dict) else None
+        if (
+            isinstance(item, dict)
+            and item.get("severity") == "major"
+            and isinstance(what, str)
+            and _BACKGROUND.search(what)
+            and not _STILL_MAJOR.search(what)
+        ):
+            item = {**item, "severity": "minor"}
+            changed = True
+        softened.append(item)
+    if not changed:
+        return verdict
+    out = dict(verdict)
+    out["issues"] = softened
+    if out.get("verdict") == "reject" and not any(
+        isinstance(item, dict) and item.get("severity") == "major" for item in softened
+    ):
+        out["verdict"] = "pass"
+    return out
 
 
 def _jpeg(raw: bytes) -> bytes:
@@ -128,7 +168,7 @@ def run(candidate: bytes, value: dict, references: dict, *, timeout: float) -> d
             prompt_file.chmod(0o600)
             raw = execute(profile, work, arguments(session, prompt_file), timeout=timeout)
         _require_model(raw)
-        verdict = parse(raw.encode("utf-8"))
+        verdict = background_only_passes(parse(raw.encode("utf-8")))
     except Exception as exc:
         errno = getattr(exc, "errno", None)
         detail = type(exc).__name__ if not isinstance(errno, int) else f"{type(exc).__name__}:{errno}"

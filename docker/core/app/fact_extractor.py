@@ -25,6 +25,32 @@ MAX_COMPACT_SUMMARY_CHARS = 1500
 
 VALID_MOODS = frozenset(mood.value for mood in Mood)
 
+# interaction.type values the extraction prompt is allowed to return.
+_INTERACTION_TYPES = frozenset(
+    {
+        "greeting",
+        "genuine_interest",
+        "personal_sharing",
+        "compliment",
+        "mission_discussion",
+        "remembering",
+        "neutral",
+        "flirty",
+        "playful",
+        "tender",
+        "warm",
+        "affectionate",
+        "combative",
+        "hostile",
+        "angry",
+        "rude",
+        "sad",
+        "hurt",
+        "distressed",
+        "vulnerable",
+    }
+)
+
 _DEFAULT_RESULT: dict[str, Any] = {
     "facts": [],
     "mood": "composed",
@@ -72,6 +98,9 @@ alone / I don't know what to do" are distress. Intensity 7-10 for loss or despai
 IMPORTANT: Distress is not hostility. When the Commander is hurting, Klukai turns \
 toward him: her mood is protective, worried or tender. Never irritated, exasperated, \
 sulking, stern, smug, teasing, or heartbroken at him.
+interaction type and intensity describe the Commander's message only. Do not \
+classify Klukai's reply and do not let her tone set them. A quote, when you \
+include one under "quote", is his words, never hers.
 
 facts: Relationship facts worth long-term storage as {{"key","value"}} string pairs. \
 Examples: {{"key":"favorite_drink","value":"black coffee"}}, {{"key":"callsign","value":"Wolf"}}. \
@@ -210,16 +239,29 @@ async def extract_facts(
     if result is None:
         return dict(_DEFAULT_RESULT)
 
-    # Validate mood
-    mood = result.get("mood", "composed")
-    if not isinstance(mood, str) or mood not in VALID_MOODS:
-        logger.warning("Invalid mood '%s', defaulting to composed", mood)
+    # A missing or invalid field is filled in so callers can read the dict.
+    # The flag says it was not a reading, so it must not be stored as one.
+    raw_mood = result.get("mood")
+    if isinstance(raw_mood, str) and raw_mood in VALID_MOODS:
+        mood = raw_mood
+        mood_defaulted = False
+    else:
+        if "mood" in result:
+            logger.warning("Invalid mood '%s', defaulting to composed", raw_mood)
         mood = "composed"
+        mood_defaulted = True
 
-    # Validate interaction
-    interaction = result.get("interaction", {})
-    if not isinstance(interaction, dict) or "type" not in interaction:
+    raw_interaction = result.get("interaction")
+    if (
+        isinstance(raw_interaction, dict)
+        and isinstance(raw_interaction.get("type"), str)
+        and raw_interaction["type"] in _INTERACTION_TYPES
+    ):
+        interaction = raw_interaction
+        interaction_defaulted = False
+    else:
         interaction = {"type": "neutral", "intensity": 5}
+        interaction_defaulted = True
 
     # Validate inside_joke — must be a dict carrying both a label and a note,
     # else drop it (the LLM sometimes emits a bare string or partial object).
@@ -243,6 +285,10 @@ async def extract_facts(
         "gift_item": result.get("gift_item"),
         "inside_joke": inside_joke,
     }
+    if mood_defaulted:
+        out["mood_defaulted"] = True
+    if interaction_defaulted:
+        out["interaction_defaulted"] = True
 
     if image_generated and "memory_curation" in result:
         out["memory_curation"] = result["memory_curation"]
@@ -343,7 +389,10 @@ async def create_episode_summary(
     prompt = f"Write a 1-2 sentence Klukai journal entry about this interaction.\n\n{conversation}"
 
     text = await background_llm.text("episode_summary", prompt, max_tokens=150)
-    return text or None
+    from .memory_recall import sanitize
+
+    visible = sanitize(text or "").strip()
+    return visible or None
 
 
 async def generate_mission_update(
@@ -420,5 +469,11 @@ async def compact_turns(turns: list[dict[str, Any]]) -> str | None:
         max_tokens=200,
         haiku_max_tokens=extraction_llm.COMPACTION_MAX_TOKENS,
     )
-    # Haiku's budget includes thinking, so it does not bound the stored recap.
-    return text.strip()[:MAX_COMPACT_SUMMARY_CHARS] or None
+    # Thinking is not the summary. A reply that is only a scratch pad must
+    # not replace the summary already stored for this session.
+    from .memory_recall import sanitize
+
+    visible = sanitize(text or "").strip()
+    if not visible:
+        return None
+    return visible[:MAX_COMPACT_SUMMARY_CHARS] or None

@@ -15,7 +15,8 @@ Design:
   mirroring how memory_archive writes image files under ``IMAGES_DIR``.
 - A row lands in ``companion_voice_notes`` (migration 151), scoped per user.
 - What she reads aloud is the text minus stage directions ("(she smiles)",
-  "*nods*"), clipped at a sentence end; the full text is stored as the prompt.
+  "*nods*"), in clips of at most 500 characters, in order. A long line's
+  tail is spoken, not dropped. The full text is stored as the prompt.
 
 TEXT-ONLY TODAY: ``voice_letters_enabled()`` is false, so no letter is
 synthesized at all. The PWA plays a ``voice_letter``'s audio unasked, and she
@@ -39,7 +40,7 @@ import uuid
 from pathlib import Path
 
 from .db import get_pool
-from .helpers import strip_actions_for_tts, tts_clip
+from .helpers import strip_actions_for_tts
 
 logger = logging.getLogger(__name__)
 
@@ -51,8 +52,8 @@ AUDIO_DIR = Path(os.environ.get("AUDIO_DIR", "/audio"))
 # she says, so they are read as "en" (what the PWA sends too).
 DEFAULT_VOICE_LANGUAGE = os.environ.get("VOICE_LANGUAGE", "en")
 
-# /api/tts caps a line at 500 chars. Match that so a long reflective greeting
-# never fails synthesis (the text greeting still carries in full).
+# /api/tts caps one Fish request at 500 chars. A longer greeting is several
+# requests, in order, so the tail is not discarded to stay under that cap.
 _MAX_TTS_CHARS = 500
 
 
@@ -89,27 +90,36 @@ async def save_voice_note(
 
     # Stage directions are not read aloud; a letter that is nothing but
     # directions has no voice to give it, so there is no letter.
-    speech = tts_clip(strip_actions_for_tts(text), _MAX_TTS_CHARS)
-    if not speech:
-        logger.info("Voice letter for %s had no speakable text — skipped", user_id)
-        return None
-
-    note_id = str(uuid.uuid4())
-    filename = f"{note_id}.wav"
-
-    # 1. Synthesize via Fish (mirror /api/tts request shape).
+    # 1. Synthesize via Fish (mirror /api/tts request shape), one clip at a
+    # time, in order. The tail of a long line is a later clip, not dropped.
     try:
-        from .voice_client import post_tts
+        from .voice_client import join_wavs, post_tts, speech_chunks
 
-        r = await post_tts({"text": speech, "language": language})
-        if r.status_code != 200:
-            logger.warning(
-                "Voice letter synth failed (HTTP %s) for %s — falling back to text",
-                r.status_code,
-                user_id,
+        parts = speech_chunks(strip_actions_for_tts(text), _MAX_TTS_CHARS)
+        if not parts:
+            logger.info(
+                "Voice letter for %s had no speakable text — skipped", user_id
             )
             return None
-        audio_bytes = r.content
+        note_id = str(uuid.uuid4())
+        filename = f"{note_id}.wav"
+        audios: list[bytes] = []
+        for speech in parts:
+            r = await post_tts({"text": speech, "language": language})
+            if r.status_code != 200:
+                logger.warning(
+                    "Voice letter synth failed (HTTP %s) for %s — falling back to text",
+                    r.status_code,
+                    user_id,
+                )
+                return None
+            if not r.content:
+                logger.warning(
+                    "Voice letter synth returned empty audio for %s", user_id
+                )
+                return None
+            audios.append(r.content)
+        audio_bytes = join_wavs(audios)
     except Exception as e:
         logger.warning("Voice letter synth unavailable for %s: %s", user_id, e)
         return None

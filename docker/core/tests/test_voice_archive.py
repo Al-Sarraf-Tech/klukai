@@ -158,9 +158,11 @@ class TestSaveVoiceNoteHappy:
              patch("app.voice_archive.get_pool", return_value=_Pool(conn)):
             await voice_archive.save_voice_note(long_text, user_id="alice")
 
-        # Synth text capped at 500 chars …
-        assert len(post.await_args.args[0]["text"]) == 500
-        # … but the full text is persisted as text_prompt.
+        sent = [call.args[0]["text"] for call in post.await_args_list]
+        assert sent
+        assert all(len(piece) <= 500 for piece in sent)
+        assert len(sent) > 1
+        assert "".join(sent) == long_text
         assert conn.executed[0][1][2] == long_text
 
     @pytest.mark.asyncio
@@ -177,9 +179,12 @@ class TestSaveVoiceNoteHappy:
              patch("app.voice_archive.get_pool", return_value=_Pool(conn)):
             await voice_archive.save_voice_note(long_text, user_id="alice")
 
-        sent = post.await_args.args[0]["text"]
-        assert len(sent) <= 500
-        assert sent.endswith("Welcome back, Commander.")
+        sent = [call.args[0]["text"] for call in post.await_args_list]
+        assert len(sent) > 1
+        assert all(
+            len(piece) <= 500 and piece.endswith("Welcome back, Commander.")
+            for piece in sent
+        )
 
     @pytest.mark.asyncio
     async def test_stage_directions_are_not_read_aloud(self, tmp_path, monkeypatch):

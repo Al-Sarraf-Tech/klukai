@@ -64,7 +64,7 @@ _LEAVE_PHRASES = tuple(
         r"\b(?:heading|headed|off|leaving)\s+(?:to|for)\s+" + _WORKPLACE + _END,
         r"\b(?:heading|headed|logging|signing)\s+(?:out|off)\b" + _END,
         r"\bi'?m\s+(?:off|out|leaving|outta\s+here)\b" + _END,
-        r"\bgtg\b|\bg2g\b|\bttyl\b|\bttyt\b|\bcya\b|\bbrb\b",
+        r"\b(?:gtg|g2g|ttyl|ttyt|cya|brb(?:\s+laters?|\s+l8r)?)\b",
         r"\b(?:good\s*-?\s*)?by+e+(?:\s*-?\s*by+e+)?\b",
         r"\bpeace\s+out\b",
         r"\btalk\s+(?:to\s+(?:you|ya|u)\s+)?(?:tomorrow|tmrw|tmr|later|soon|in\s+the\s+morning)\b",
@@ -175,6 +175,66 @@ _PAST_ARTICLE = frozenset(
 )
 
 
+# Words that may follow a sign-off without starting another thought.
+# "later" is not one of them: "I'm going to bed later" is when, not a close.
+_TAIL_WORD = frozenset(
+    {
+        "now",
+        "soon",
+        "then",
+        "sorry",
+        "again",
+        "though",
+        "actually",
+        "unfortunately",
+        "lol",
+        "haha",
+        "bye",
+        "cya",
+        "ttyl",
+        "klukai",
+        "kluk",
+        "love",
+        "babe",
+        "baby",
+        "dear",
+        "darling",
+        "sweetheart",
+        "princess",
+        "beautiful",
+        "hon",
+        "honey",
+        "everyone",
+        "all",
+        "my",
+        "for",
+        "a",
+        "bit",
+        "while",
+        "real",
+        "today",
+        "tonight",
+        "morning",
+        "the",
+        "night",
+        "commander",
+        "later",
+        "laters",
+        "l8r",
+    }
+)
+
+
+def _signoff_tail(rest: str) -> bool:
+    """True when the rest of the clause is empty or only a harmless tail.
+
+    The match itself has to close the clause. "I'll talk to you later about
+    the mission" and "bye for now but read this first" keep going, so they
+    are not a sign-off. "bye for now" and "see you tomorrow morning" are.
+    """
+    return all(word in _TAIL_WORD for word in _WORD.findall(rest))
+
+
 def _goodbye_blocked(prefix: str) -> bool:
     """True when the words before a match make it not his goodbye."""
     words = _WORD.findall(prefix)
@@ -213,7 +273,11 @@ def _clause_kind(clause: str, min_end: int, rest: str = "") -> GoodbyeKind | Non
     for kind, phrases in kinds:
         for phrase in phrases:
             for m in phrase.finditer(clause):
-                if m.end() >= min_end and not _goodbye_blocked(clause[: m.start()]):
+                if (
+                    m.end() >= min_end
+                    and not _goodbye_blocked(clause[: m.start()])
+                    and _signoff_tail(clause[m.end() :])
+                ):
                     return kind
     if alone in _LEAVE_ALONE:
         if clause.rstrip().endswith(",") and _next_clause_has_substance(rest):
@@ -236,8 +300,17 @@ def detect_goodbye(message: str) -> GoodbyeKind | None:
     text = message.lower().replace("\u2019", "'").replace("\u2018", "'").strip()
     tail_from = len(text) - _GOODBYE_TAIL_CHARS if len(text) > _GOODBYE_MAX_LEN else 0
     found: set[str] = set()
+    # "later" after a real plan ("I have to go to the store, later") is when,
+    # not a sign-off. A goodbye in an earlier clause still counts.
+    seen_substance = False
     for m in _CLAUSE.finditer(text):
-        kind = _clause_kind(m.group(), tail_from - m.start(), rest=text[m.end() :])
+        clause = m.group()
+        kind = _clause_kind(clause, tail_from - m.start(), rest=text[m.end() :])
+        core = [w for w in _WORD.findall(clause) if w not in _ALONE_STRIP]
+        if kind == "leave" and seen_substance and core in (["later"], ["laters"], ["l8r"]):
+            kind = None
+        if core:
+            seen_substance = True
         if kind:
             found.add(kind)
     if "night" in found:

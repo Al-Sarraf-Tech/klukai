@@ -431,8 +431,16 @@ async def deliver(user_id: str, action: dict[str, Any]) -> None:
         held = "goodbye hold"
     if held:
         if now_local() < hold_deadline(action, commitment):
+            # The retry row is the effect. Mark it before the insert so a
+            # failure after the commit cannot schedule a second one.
+            retry = {
+                key: value
+                for key, value in action.items()
+                if key != deferred.EFFECT_STARTED
+            }
+            action[deferred.EFFECT_STARTED] = True
             await deferred.schedule(
-                dict(action), user_id=user_id, delay_seconds=HOLD_STEP_SECONDS
+                retry, user_id=user_id, delay_seconds=HOLD_STEP_SECONDS
             )
             return
         logger.info(
@@ -446,6 +454,7 @@ async def deliver(user_id: str, action: dict[str, Any]) -> None:
         return
 
     text = render(slot, commitment, level, cfg)
+    action[deferred.EFFECT_STARTED] = True
     await ws.send_proactive(user_id, text)  # persists to history as model=proactive
     try:
         if not ws.is_connected(user_id):

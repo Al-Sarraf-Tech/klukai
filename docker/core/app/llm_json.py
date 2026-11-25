@@ -12,6 +12,7 @@ from typing import Any
 
 import json
 import logging
+import math
 import re
 
 from pydantic import JsonValue
@@ -34,6 +35,64 @@ def _repair_trailing_commas(text: str) -> str:
     )
 
 
+def _finite_json(value: JsonValue) -> JsonValue:
+    """Reject NaN and Infinity. They are not JSON and poison stored memory."""
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise json.JSONDecodeError("non-finite number", "NaN", 0)
+        return value
+    if isinstance(value, list):
+        return [_finite_json(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _finite_json(item) for key, item in value.items()}
+    return value
+
+
+def _looks_like_json_object(text: str) -> bool:
+    """A prose brace (``{braces}``) is not the start of a JSON document."""
+    if not text.startswith("{"):
+        return False
+    rest = text[1:].lstrip()
+    return not rest or rest[0] in '{"}-0123456789['
+
+
+def _unclosed_object(text: str) -> bool:
+    """True when ``text`` is a JSON object that never finishes.
+
+    A nested object inside that cut-off value is a fragment of the same
+    document. Returning it stores the inner fact as the whole memory record.
+    """
+    if not _looks_like_json_object(text):
+        return False
+    depth = 0
+    in_string = False
+    escape = False
+    for char in text:
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth -= 1
+            if depth <= 0:
+                return False
+    return True
+
+
+def _decoded_object(text: str, pos: int = 0) -> dict[str, Any] | None:
+    value, _end = _DECODER.raw_decode(text, pos)
+    value = _finite_json(value)
+    return value if isinstance(value, dict) else None
+
+
 def _first_object(text: str) -> dict[str, Any] | None:
     """Return the first complete JSON object embedded anywhere in ``text``.
 
@@ -45,23 +104,49 @@ def _first_object(text: str) -> dict[str, Any] | None:
     pos = text.find("{")
     while pos != -1:
         try:
-            value, _end = _DECODER.raw_decode(text, pos)
+            found = _decoded_object(text, pos)
         except json.JSONDecodeError:
             # Try repairing this outer candidate before searching its children.
             # Start at the brace: unmatched quotes in leading prose are not
             # JSON string delimiters and must not alter tokenization here.
             try:
-                value, _end = _DECODER.raw_decode(_repair_trailing_commas(text[pos:]))
+                found = _decoded_object(_repair_trailing_commas(text[pos:]))
             except json.JSONDecodeError:
-                pass
+                # A cut-off outer object must not donate its nested object.
+                if _unclosed_object(text[pos:]):
+                    return None
             else:
-                if isinstance(value, dict):
-                    return value
+                if found is not None:
+                    return found
         else:
-            if isinstance(value, dict):
-                return value
+            if found is not None:
+                return found
         pos = text.find("{", pos + 1)
     return None
+
+
+def _close_truncated(text: str) -> JsonValue | None:
+    """Close a truncated object whose strings are already finished.
+
+    Inventing the end of a cut-off string (``{"summary": "``) stores an empty
+    value as if the model had finished. An empty ``{}`` invented from ``{``
+    is not a document either.
+    """
+    if text.count('"') % 2 == 1:
+        return None
+    braces = text.count("{") - text.count("}")
+    brackets = text.count("[") - text.count("]")
+    if braces < 0 or brackets < 0 or (braces == 0 and brackets == 0):
+        return None
+    # Arrays close before the objects that contain them.
+    fixed = text + ("]" * brackets) + ("}" * braces)
+    try:
+        value = _parse_value(fixed)
+    except json.JSONDecodeError:
+        return None
+    if value == {} or value == []:
+        return None
+    return value
 
 
 def extract_text(response: dict[str, Any]) -> str:
@@ -93,14 +178,28 @@ def extract_text(response: dict[str, Any]) -> str:
 def _parse_value(text: str) -> JsonValue:
     """The standard JSON decoder guarantees the recursive JSON value domain."""
     value: JsonValue = json.loads(text)
-    return value
+    return _finite_json(value)
+
+
+def _fenced_value(text: str) -> JsonValue | None:
+    """A fenced block that is itself JSON. A code sample must not hide a later object."""
+    match = _MARKDOWN_JSON.search(text)
+    if match is None:
+        return None
+    fenced = match.group(1).strip()
+    for candidate in (fenced, _repair_trailing_commas(fenced)):
+        try:
+            return _parse_value(candidate)
+        except json.JSONDecodeError:
+            continue
+    return None
 
 
 def parse_json(text: str) -> JsonValue:
     """Parse any JSON value from messy LLM output, returning None on failure.
 
-    Handles: markdown blocks, embedded JSON in prose, trailing commas,
-    single quotes, truncated strings.
+    Handles markdown blocks, embedded JSON in prose, and trailing commas.
+    A cut-off string or a non-finite number is failure, not a value to store.
     """
     if not text:
         return None
@@ -112,39 +211,32 @@ def parse_json(text: str) -> JsonValue:
     except json.JSONDecodeError:
         pass
 
-    # Strip markdown code blocks
-    md_match = _MARKDOWN_JSON.search(text)
-    if md_match:
-        try:
-            return _parse_value(md_match.group(1).strip())
-        except json.JSONDecodeError:
-            text = md_match.group(1).strip()
+    fenced = _fenced_value(text)
+    if fenced is not None:
+        return fenced
 
     # A top-level JSON candidate may also be an array. For mixed prose, each
     # object is decoded/repaired at its own boundary by _first_object below.
+    body = text
     if text.startswith(("{", "[")):
-        text = _repair_trailing_commas(text)
+        body = _repair_trailing_commas(text)
 
     # Try again
     try:
-        return _parse_value(text)
+        return _parse_value(body)
     except json.JSONDecodeError:
         pass
     found = _first_object(text)
     if found is not None:
         return found
 
-    # Last resort: fix truncated strings by closing them
-    try:
-        # Find last unclosed quote and close it
-        fixed = text
-        if fixed.count('"') % 2 == 1:
-            fixed += '"'
-        # Close any unclosed brackets
-        opens = fixed.count("{") - fixed.count("}")
-        fixed += "}" * max(0, opens)
-        opens = fixed.count("[") - fixed.count("]")
-        fixed += "]" * max(0, opens)
-        return _parse_value(fixed)
-    except json.JSONDecodeError:
-        return None
+    for candidate in (text, body):
+        closed = _close_truncated(candidate)
+        if closed is not None:
+            return closed
+    fenced_match = _MARKDOWN_JSON.search(text)
+    if fenced_match is not None:
+        closed = _close_truncated(fenced_match.group(1).strip())
+        if closed is not None:
+            return closed
+    return None

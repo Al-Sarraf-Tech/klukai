@@ -2,8 +2,8 @@
 
 When reflection-on-return takes the 'dream' branch, the generated dream
 narrative is saved as a `companion_memories` row with category=`Dreams`
-and a sentinel filename (dreams are text-only; no image unless a later
-background job paints one from the dream's prompt).
+and a sentinel filename. Dreams are text only: the row has no image prompt,
+and picture-generation instructions are not stored.
 
 Dreams are scoped per-user, searchable via /api/memories/search, and
 listable via /api/dreams. They count toward memory_count in the stats
@@ -15,6 +15,7 @@ from typing import Any
 
 
 import logging
+import re
 import uuid
 
 from .db import get_pool
@@ -23,6 +24,23 @@ logger = logging.getLogger(__name__)
 
 
 DREAM_CATEGORY = "Dreams"
+
+# Lines that are instructions to an image model, not something she dreamed.
+_PICTURE_INSTRUCTION = re.compile(
+    r"(?i)(?:negative prompt|danbooru|masterpiece|best quality|\bscore_\d+\b|"
+    r"\b1girl\b|\b1boy\b|image prompt|scene_tags\s*:|"
+    r"\b(?:generate|render|draw|paint) (?:me )?(?:an? )?(?:image|picture|illustration)\b)"
+)
+
+
+def without_picture_instructions(text: str) -> str:
+    """Drop picture-generation lines. A dream is prose, never a render brief."""
+    kept: list[str] = []
+    for line in (text or "").splitlines():
+        if _PICTURE_INSTRUCTION.search(line):
+            continue
+        kept.append(line)
+    return "\n".join(kept).strip()
 
 
 async def save_dream(
@@ -35,10 +53,11 @@ async def save_dream(
 
     Dreams are kept by default and carry the Dreams category. A deterministic
     sentinel filename (`dream-{uuid}.txt`) is used since the table requires
-    NOT NULL on filename and dreams are text-first. If a later job paints a
-    dream image, it can replace filename + thumb_filename.
+    NOT NULL on filename. The prompt column stays empty so nothing paints
+    an image from the dream.
     """
-    if not dream_text or len(dream_text.strip()) < 20:
+    dream_text = without_picture_instructions(dream_text)
+    if len(dream_text) < 20:
         return None
     try:
         memory_id = str(uuid.uuid4())
@@ -61,7 +80,7 @@ async def save_dream(
                     "klukai-dreamer",
                     "reflection-on-return",
                     user_id,
-                    "dream",
+                    None,
                 ),
             )
             await conn.commit()

@@ -136,7 +136,7 @@ class LLMCompletionsMixin(ABC):
         from .llm_router import FAILURE_SENTINEL, LLMStreamFailed
 
         if config.provider == "grok":
-            async for piece in self._stream_grok(system_prompt, messages):
+            async for piece in self._stream_grok(system_prompt, messages, config):
                 yield piece
             return
         if config.provider != "anthropic" or self._anthropic_http is None:
@@ -158,7 +158,7 @@ class LLMCompletionsMixin(ABC):
                 getattr(exc, "status", None),
             )
         self._select_grok(config)
-        async for piece in self._stream_grok(system_prompt, messages):
+        async for piece in self._stream_grok(system_prompt, messages, config):
             yield piece
 
     async def _stream_claude(
@@ -199,20 +199,30 @@ class LLMCompletionsMixin(ABC):
             yield piece
 
     async def _stream_grok(
-        self, system_prompt: str, messages: list[dict[str, Any]]
+        self,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        config: LLMConfig | None = None,
     ) -> AsyncIterator[str]:
         """Yield Grok text. The xAI API is first; the account CLI is the fallback.
 
         A failure after any API token is already on the wire stops the turn.
-        Appending a CLI answer would concatenate two replies.
+        Appending a CLI answer would concatenate two replies. The CLI speaks
+        as the stable persona, and the done frame names grok, not whoever
+        failed before her.
         """
         from .grok_chat import GrokChatError, iter_text
-        from .llm_router import FAILURE_SENTINEL, LLMStreamFailed
+        from .llm_router import FAILURE_SENTINEL, GROK_MODEL, LLMStreamFailed
         from .xai_chat import XaiChatError
         from .xai_chat import iter_text as xai_text
         from .xai_spend import api_key, chat_backend, redact
 
+        if config is not None and not str(config.model).startswith("grok"):
+            # Done frame names the model that speaks, not the Claude id that failed.
+            config.provider = "grok"
+            config.model = GROK_MODEL
         persona, turns, turn_state, prompt = split_prompt(system_prompt, messages)
+        cli_prompt = f"{turn_state.strip()}\n\n{prompt}" if turn_state.strip() else prompt
         if chat_backend() == "api" and api_key():
             yielded = False
             try:
@@ -232,7 +242,7 @@ class LLMCompletionsMixin(ABC):
                 )
         yielded = False
         try:
-            async for piece in iter_text(system_prompt, prompt):
+            async for piece in iter_text(persona, cli_prompt):
                 yielded = True
                 yield piece
         except GrokChatError as exc:
@@ -460,6 +470,7 @@ class LLMCompletionsMixin(ABC):
     ) -> dict[str, Any]:
         from .grok_chat import MODEL, GrokChatError, chat_effort, complete_turn
 
+        persona, _turns, turn_state, _flat = split_prompt(system_prompt, messages)
         lines = []
         for message in messages:
             content = message.get("content", "")
@@ -470,7 +481,9 @@ class LLMCompletionsMixin(ABC):
                 )
             lines.append(f"{message.get('role', 'user')}: {content}")
         prompt = "\n".join(lines).strip() or "."
-        system = system_prompt
+        if turn_state.strip():
+            prompt = f"{turn_state.strip()}\n\n{prompt}"
+        system = persona
         if tools and allow_tools:
             names = ", ".join(tool["function"]["name"] for tool in tools)
             system += (

@@ -15,7 +15,7 @@ _VERBS = (
 _YOU_IN = r"(?:see|want|need) you in"
 _NEGATION = re.compile(
     r"\b(?:don'?t|do not|never|stop|quit|no more|not|can'?t|cannot|won'?t|shouldn'?t|"
-    r"mustn'?t|wouldn'?t|couldn'?t|didn'?t|doesn'?t)\s+(?:\w+\s+){0,2}$"
+    r"mustn'?t|wouldn'?t|couldn'?t|didn'?t|doesn'?t)\b"
 )
 _QUESTION_ABOUT = re.compile(r"\b(?:do|did|have) you (?:ever |still |even )?$")
 # The wear-verb must be addressed to HER: an imperative opening a clause
@@ -47,7 +47,11 @@ def detect_outfit_request(
     ]
     for verb in re.finditer(rf"\b(?:{_YOU_IN}|{_VERBS})\b", lower):
         before = lower[: verb.start()]
-        if _NEGATION.search(before) or _QUESTION_ABOUT.search(before):
+        # Negation anywhere in this clause cancels it. "I don't want you to
+        # wear the coat" used to slip through: only two words were allowed
+        # between the "don't" and the verb. An earlier sentence does not.
+        clause = re.split(r"[.!?;,]", before)[-1]
+        if _NEGATION.search(clause) or _QUESTION_ABOUT.search(before):
             continue
         if not verb.group(0).endswith("you in") and not _ADDRESSED.search(before):
             continue

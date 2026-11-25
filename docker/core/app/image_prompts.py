@@ -34,13 +34,31 @@ if TYPE_CHECKING:
     from app.image_scene import SceneBrief
 
 
+# Callsigns he actually uses. Checked before the short names so "ump45" is Leva
+# and not a stray "45". "g28" is Belka's rifle as often as it is Belka, so it
+# is not an alias here.
+_SQUAD_ALIASES = (
+    ("ots-14", "groza"),
+    ("ots14", "groza"),
+    ("ump45", "leva"),
+    ("ump9", "lenna"),
+    ("g36k", "andoris"),
+    ("g36", "andoris"),
+    ("g11", "mechty"),
+)
+
+
 def detect_squad_members(text: str) -> list[str]:
     """Detect which squad members are mentioned in the text, by whole name
-    ("elevator" or "relevant" must not put Leva in his picture)."""
+    ("elevator" or "relevant" must not put Leva in his picture). A callsign
+    counts: "g11" is Mechty."""
     lower = text.lower()
-    found = []
+    found: list[str] = []
+    for alias, name in _SQUAD_ALIASES:
+        if name not in found and re.search(r"\b" + re.escape(alias) + r"\b", lower):
+            found.append(name)
     for name in SQUAD_KEYWORDS:
-        if re.search(r"\b" + re.escape(name) + r"\b", lower):
+        if name not in found and re.search(r"\b" + re.escape(name) + r"\b", lower):
             found.append(name)
     return found
 
@@ -103,12 +121,18 @@ def build_mission_prompt(
 _PICTURE_NOUN = r"(?:selfie|photo(?:graph)?|picture|pic|image|snapshot)"
 _PICTURE_ARTICLE = r"(?:(?:a|an|another|one|new) )?"
 _REQUEST_PREFIX = re.compile(
-    r"^(?:(?:hey|hi)[ ,]+)?(?:klukai[ ,]+)?(?:please )?"
+    r"^(?:(?:hey|hi|okay|ok|yeah|yep|yes)[ ,]+)?(?:klukai[ ,]+)?(?:please )?"
     r"(?:(?:can|could|would|will) you )?(?:please )?"
 )
+# "not" and "stop" are not opt-outs by themselves: "not the armor" and "bus stop"
+# are still pictures. A trailing "not" / "maybe not" is.
 _PICTURE_OPT_OUT = re.compile(
-    r"\b(?:don't|do not|doesn't|does not|never|not|stop|cancel|avoid|"
+    r"\b(?:don't|do not|doesn't|does not|"
+    r"stop (?:generating|sending|taking|drawing|making|with|it|that)|"
+    r"cancel|avoid (?:sending|taking|drawing|pictures?|photos?|images?|selfies?)|"
+    r"never (?:send|take|make|draw|generate|show|want)|maybe not|"
     r"no (?:more )?(?:pictures?|photos?|images?|selfies))\b"
+    r"|\bnot[.!?]*$"
 )
 # A terminal cancellation clause is different from a scene constraint such as
 # "no makeup" or depicted text such as a sign saying "no thanks".
@@ -123,9 +147,10 @@ _EDITING_CONTROLS = re.compile(
 )
 _NON_PICTURE_ACTION = re.compile(
     r"^(?:paint|draw|sketch|render|illustrate|depict|visualize) "
-    r"(?:(?:me|us) )?(?:(?:the|a|an|this|that|my|your) )?"
+    r"(?:(?:me|us) )?(?:(?:the|a|an|this|that|my|your|some) )?"
+    r"(?:(?:own|few|several) )?"
     r"(?:wall|fence|code|logs?|react|component|html|css|sql|function|"
-    r"algorithm|conclusion|inference|attention)\b"
+    r"algorithm|conclusions?|inferences?|attention)\b"
 )
 _PICTURE_DISCUSSION = re.compile(
     _PICTURE_NOUN + r" (?:generation )?"
@@ -143,7 +168,7 @@ _PICTURE_ACTION = re.compile(
 _VISUAL_TARGET = (
     r"(?:you(?:rself)?|us|together|both of us|the two of us|"
     r"your (?:outfit|clothes|dress|uniform|look|picture|photo)|"
-    r"what you look like|what you're wearing|"
+    r"what you look like|what you(?:'re| are) wearing|"
     + _PICTURE_ARTICLE
     + _PICTURE_NOUN
     + r")\b"
@@ -160,18 +185,112 @@ _SHOW_NOW = re.compile(
     r"(?:\s+(?:right )?now)?(?:,? please)?[.!?]*$"
 )
 _BARE_PLEASE = re.compile(
-    r"^(?:(?:an?|one) )?(?:pictures?|pics?|photos?|selfies?|images?),? please[.!?]*$"
+    r"^(?:(?:an?|one) )?(?:pictures?|pics?|photos?|selfies?|images?),? "
+    r"(?:please|pls)[.!?]*$"
 )
 _CLAUSE_SPLIT = re.compile(r"[?.!;—–]\s+|\s+-\s+|,\s+")
+_CLAUSE_LEAD = re.compile(r"^(?:and|then|also|plus|but)\s+")
 _PICTURE_FOLLOWUP = re.compile(
     r"^(?:how about |what about |i (?:want|would like) |i'd like |"
-    r"(?:can|could) i have )" + _PICTURE_ARTICLE + _PICTURE_NOUN + r"\b|"
-    r"^(?:another|one more) " + _PICTURE_NOUN + r"\b"
+    r"(?:can|could) i have )" + _PICTURE_ARTICLE + _PICTURE_NOUN
+    + r"\b(?!\s+shoots?\b)|"
+    r"^(?:another|one more) " + _PICTURE_NOUN + r"\b(?!\s+shoots?\b)"
 )
 _DRAW_PICTURE = re.compile(
-    r"^(?:(?:draw|paint|render|sketch|illustrate|depict|visualize) \S|"
+    r"^(?:(?:draw|drw|darw|paint|render|sketch|illustrate|depict|visualize) \S|"
     r"(?:a |an )?(?:drawing|painting|sketch|illustration|picture|image|photo) of )"
 )
+# Figures of speech. Extra words ("draw the curtains for me") stay idioms.
+# A second real subject ("and draw yourself", "of the garden") does not.
+_DRAW_IDIOM = re.compile(
+    r"(?:"
+    r"draw (?:back )?(?:the curtains|the curtain|the blinds|the shades|the drapes|"
+    r"a bath|your sword|on (?:your )?experience|the short straw|a blank|the line|"
+    r"a parallel|an analogy|a comparison)"
+    r"|draw up (?:a |the |some )?(?:contract|chair|plans|document|will|agreement|"
+    r"list|papers)"
+    r"|paint your nails|paint a rosy picture"
+    r"|paint a picture of how it (?:was|went|felt)"
+    r"|illustrate your point|render assistance"
+    r")\b"
+)
+# "Take a picture tomorrow" is not a picture now. "Not now" neither.
+_NOT_NOW = re.compile(r"\b(?:tomorrow|next week|next time|not now)\s*[.!?]*$")
+_LOOK_NOW = re.compile(
+    r"^(?:what do you look like|how do you look|"
+    r"what(?:'re| are) you wearing|what do you have on|"
+    r"what(?:'s| is) your outfit|whatcha wearing)"
+    r"(?: right now| now| today| rn)?(?:,? please)?[.!?]*$"
+)
+_SEND_NUDES = re.compile(
+    r"^(?:send|gimme|give)(?: me)? (?:some |a )?nudes?\b"
+    r"|^(?:show me )?(?:some |a )?nudes?(?:,? please)?[.!?]*$"
+)
+# "I want to see you tonight" is a visit, not an image. "See you" alone is not.
+_MEET_LATER = re.compile(
+    r"^(?:i (?:want|would like) to see|i'd like to see|(?:can|could) i see|let me see) "
+    r"(?:you|her) (?:tonight|later|soon|tomorrow|this evening|next week|next time)"
+    r"(?:,? please)?[.!?]*$"
+)
+# The system prompt's own examples of a request the old opt-out swallowed.
+_NOT_WORDS = re.compile(
+    r"^(?:(?:hey|hi)[ ,]+)?(?:klukai[ ,]+)?(?:please )?"
+    r"not words[, ]+(?:a |the )?pictures?(?:,? please)?[.!?]*$"
+)
+_DONT_TELL_SHOW = re.compile(
+    r"^(?:(?:hey|hi)[ ,]+)?(?:klukai[ ,]+)?(?:please )?"
+    r"(?:do not|don't|dont) (?:tell|say|describe|write|talk)(?: me)?"
+    r"[, ]+(?:please )?(?:show me|let me see)"
+    r"(?: (?:yourself|you|that|it))?(?:,? please)?[.!?]*$"
+)
+_PICTURE_PATTERNS = (
+    _PICTURE_ACTION,
+    _SHOW_PICTURE,
+    _PICTURE_FOLLOWUP,
+    _DRAW_PICTURE,
+)
+
+
+def _blocked_idiom(request: str) -> bool:
+    match = _DRAW_IDIOM.search(request)
+    if match is None:
+        return False
+    rest = " ".join((request[: match.start()] + " " + request[match.end() :]).split())
+    if not rest:
+        return True
+    if re.search(r"\b(?:yourself|herself)\b", rest):
+        return False
+    if re.match(r"(?:and |then )?(?:draw|paint|sketch|render)\b", rest):
+        return False
+    # "paint a rosy picture of the garden" is a picture. "of how it was" is not.
+    spoken = match.group(0)
+    return not (
+        re.match(r"of (?:the|a|an|her|you|me|us)\b", rest)
+        and not rest.startswith("of how")
+        and ("picture" in spoken or spoken.startswith("draw the line"))
+    )
+
+
+def _clause_is_picture(request: str) -> bool:
+    request = _CLAUSE_LEAD.sub("", request, count=1)
+    if not request or _blocked_idiom(request):
+        return False
+    if (
+        _PICTURE_DISCUSSION.search(request)
+        or _EDITING_CONTROLS.match(request)
+        or _CONDITIONAL_PICTURE.search(request)
+        or _NON_PICTURE_ACTION.match(request)
+        or _MEET_LATER.match(request)
+    ):
+        return False
+    if (
+        _BARE_PLEASE.match(request)
+        or _SHOW_NOW.match(request)
+        or _LOOK_NOW.match(request)
+        or _SEND_NUDES.match(request)
+    ):
+        return True
+    return any(pattern.match(request) is not None for pattern in _PICTURE_PATTERNS)
 
 
 def needs_image(message: str) -> bool:
@@ -180,35 +299,22 @@ def needs_image(message: str) -> bool:
     Accept polite requests and common selfie/photo wording, but not bare
     follow-ups, quoted examples, capability questions or technical questions.
     An opt-out anywhere in the message is conservatively left as text chat.
+    A request can follow another sentence. A figure of speech cannot.
     """
-    normalized = " ".join(message.casefold().replace("’", "'").split())
-    if _PICTURE_OPT_OUT.search(normalized) or _PICTURE_CANCELLATION.search(normalized):
+    normalized = " ".join(message.casefold().replace("’", "'").replace("‘", "'").split())
+    if not normalized or _PICTURE_CANCELLATION.search(normalized) or _NOT_NOW.search(
+        normalized
+    ):
+        return False
+    if _NOT_WORDS.match(normalized) or _DONT_TELL_SHOW.match(normalized):
+        return True
+    if _PICTURE_OPT_OUT.search(normalized):
         return False
     request = _REQUEST_PREFIX.sub("", normalized, count=1)
-    if (
-        _PICTURE_DISCUSSION.search(request)
-        or _EDITING_CONTROLS.match(request)
-        or _CONDITIONAL_PICTURE.search(request)
-        or _NON_PICTURE_ACTION.match(request)
-    ):
-        return False
-    if (
-        _BARE_PLEASE.match(request)
-        or _SHOW_NOW.match(request)
-        or any(
-            _SHOW_NOW.match(_REQUEST_PREFIX.sub("", clause, count=1))
-            for clause in _CLAUSE_SPLIT.split(request)[1:]
-        )
-    ):
-        return True
     return any(
-        pattern.match(request) is not None
-        for pattern in (
-            _PICTURE_ACTION,
-            _SHOW_PICTURE,
-            _PICTURE_FOLLOWUP,
-            _DRAW_PICTURE,
-        )
+        _clause_is_picture(_REQUEST_PREFIX.sub("", clause, count=1))
+        for clause in _CLAUSE_SPLIT.split(request)
+        if clause
     )
 
 

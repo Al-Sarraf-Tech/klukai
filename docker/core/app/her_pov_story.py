@@ -217,8 +217,17 @@ async def compose_pov(
     title = raw_title if isinstance(raw_title, str) else "From my side"
     title = re.sub(r"\s+", " ", title).strip()[:48] or "From my side"
 
+    from .dreams import without_picture_instructions
+
+    # The journal line is what the Her POV screen shows. Scene tags stay in
+    # scene_tags for the renderer; they must not ride along as prose, and the
+    # line itself is not a chat reply.
+    annotation = without_picture_instructions(annotation.strip())
+    if len(annotation) < 8:
+        annotation = "...I pulled this from our records. Don't read into why I kept it."
+
     return {
-        "annotation": annotation.strip()[:500],
+        "annotation": annotation[:500],
         "scene_tags": scene_tags.strip()[:600],
         "couple": couple,
         "mood": mood.strip()[:40] or "composed",

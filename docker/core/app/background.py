@@ -259,6 +259,30 @@ async def _scene_brief(
     return brief
 
 
+# Three outcomes the empty-image branch used to describe with one line.
+# A refusal asks him to rephrase. It is not a reason to skip the checker.
+_REFUSED_LINE = "...I won't draw that one, Commander. Rephrase it for me."
+_BLIP_LINE = (
+    "...Visualization failed. Interference in the rendering pipeline. Ask me again."
+)
+_COVERED_LINE = "...I drew it covered, Commander."
+
+
+def delivery_line(outcome: dict[str, Any] | None, *, covered: bool) -> str:
+    """What she says when no image bytes came back.
+
+    Safety refusal: ask him to rephrase. A failed render is a blip. An implied
+    cover that came back empty was drawn covered, not a pipeline failure.
+    """
+    phase = outcome.get("phase") if isinstance(outcome, dict) else None
+    empty = bool(isinstance(outcome, dict) and outcome.get("empty"))
+    if phase == "refused":
+        return _REFUSED_LINE
+    if covered and (empty or phase in (None, "", "empty", "completed")):
+        return _COVERED_LINE
+    return _BLIP_LINE
+
+
 async def background_image_gen(
     user_request: str,
     chat_context: str = "",
@@ -323,7 +347,7 @@ async def background_image_gen(
         aff_state = await affection.get_state(user_id)
         aff_level = aff_state.level
 
-        from .image_provider import implied_cover, nudity_allowed
+        from .image_provider import asks_for_sex_act, implied_cover, nudity_allowed
         from .image_scene import turns_from_context
         from .wardrobe_variation import derive_seed
 
@@ -341,11 +365,28 @@ async def background_image_gen(
         from . import wardrobe as _wardrobe
 
         costume = await render_costume(user_id, aff_level)
+        # A sex act is never drawn. Alone, past the gate, it is the covered
+        # picture. With him or the squad, or below the gate, she asks him to
+        # rephrase and nothing is sent to the renderer.
+        sex_act = asks_for_sex_act(user_request)
+        if sex_act and not (
+            use_agy
+            and aff_level >= INTIMATE_MIN_LEVEL
+            and not squad_members
+            and not couple
+        ):
+            picture_intent.note_picture(user_id, "failed")
+            await ws.send_proactive(user_id, _REFUSED_LINE, persist=False)
+            await ws.send(user_id, {"type": "thinking", "content": ""})
+            return
         # Only his own words can ask for it, never her replies.
-        granted = use_agy and nudity_allowed(
-            user_request,
-            intimate=aff_level >= INTIMATE_MIN_LEVEL,
-            include_commander=couple,
+        granted = sex_act or (
+            use_agy
+            and nudity_allowed(
+                user_request,
+                intimate=aff_level >= INTIMATE_MIN_LEVEL,
+                include_commander=couple,
+            )
         )
         full_prompt = build_prompt(
             scene_tags,
@@ -375,6 +416,7 @@ async def background_image_gen(
 
         avoid = brief.avoid() or None
         outcome = None
+        covered = bool(granted)
         if use_agy:
             from .account_images import (
                 explicit_request_id,
@@ -390,9 +432,10 @@ async def background_image_gen(
                 negative_extra=avoid,
             )
             # Words asking for what this picture will not draw never reach the model.
+            # A sex act is one of those, even when the picture is the covered one.
             said = (
                 ""
-                if asks_for_nudity(user_request) and not granted
+                if sex_act or (asks_for_nudity(user_request) and not granted)
                 else plain_request(user_request)
             )
             full_prompt = "\n\n".join(
@@ -439,19 +482,20 @@ async def background_image_gen(
             await _deliver_generated_image(
                 user_id, img_bytes, full_prompt, aff_level, outcome, picture
             )
+            if covered:
+                await ws.send_proactive(user_id, _COVERED_LINE, persist=False)
             picture_intent.note_picture(user_id, "delivered")
         else:
+            line = delivery_line(outcome, covered=covered)
             logger.warning(
                 "Image gen: no picture for %s (%s)",
                 user_id,
                 (outcome or {}).get("phase") or ("account" if use_agy else "local"),
             )
-            picture_intent.note_picture(user_id, "failed")
-            await ws.send_proactive(
-                user_id,
-                "...Visualization failed. Interference in the rendering pipeline. Ask me again.",
-                persist=False,
+            picture_intent.note_picture(
+                user_id, "covered" if line == _COVERED_LINE else "failed"
             )
+            await ws.send_proactive(user_id, line, persist=False)
             await ws.send(
                 user_id, {"type": "thinking", "content": ""}
             )  # clear thinking bubble
@@ -532,11 +576,19 @@ async def background_recall(content: str, session: SessionState, user_id: str) -
         logger.error("Background recall failed: %s", e)
 
 
-async def do_memory_keep(memory_id: str, kept: bool) -> None:
-    """Apply a commander save/discard override to a memory."""
+async def do_memory_keep(
+    memory_id: str, kept: bool, user_id: str | None = None
+) -> None:
+    """Apply a commander save/discard override to a memory.
+
+    ``user_id`` scopes the row. Without it the update matches on id alone.
+    """
     try:
         kept_by = "commander" if kept else "discarded"
-        ok = await memory_archive.update_kept(memory_id, kept=kept, kept_by=kept_by)
+        scope = {"user_id": user_id} if user_id is not None else {}
+        ok = await memory_archive.update_kept(
+            memory_id, kept=kept, kept_by=kept_by, **scope
+        )
         if ok:
             logger.info("Memory %s: kept=%s by commander", memory_id, kept)
     except Exception as e:

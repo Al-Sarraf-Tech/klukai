@@ -501,6 +501,12 @@ def register_websocket(app: FastAPI) -> None:
                         raw = await _receive_device_frame(websocket, disconnected)
                     except WebSocketDisconnect:
                         break
+                    except RuntimeError:
+                        # A closed socket's in-flight receive raises RuntimeError
+                        # ("Need to call accept first"), not WebSocketDisconnect.
+                        # The state check above only sees a close that already
+                        # happened before this read.
+                        break
                     # Authentication may expire or be revoked while receive
                     # waits, including on another process. Check every frame.
                     if not await ws.validate_connection(

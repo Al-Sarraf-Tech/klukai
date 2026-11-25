@@ -221,6 +221,24 @@ def occasions_on(
     return frozenset(found)
 
 
+def spanning_occasions(
+    day: date,
+    calendar: date,
+    p: dict[str, Any] | None = None,
+    commander_birthday: str | None = None,
+) -> frozenset[str]:
+    """Occasions of her day, plus the calendar day when it has not turned yet.
+
+    Rituals greet him at midnight. Between then and 05:00 the oath gate has to
+    see that day too, or she accepts the gown and the roster still dresses her
+    in something else.
+    """
+    found = set(occasions_on(day, p, commander_birthday))
+    if calendar != day:
+        found |= occasions_on(calendar, p, commander_birthday)
+    return frozenset(found)
+
+
 # ── The daily pick (pure) ──────────────────────────────────────────────────
 
 
@@ -298,9 +316,14 @@ def pick_daily_outfit(
 ) -> tuple[str, str]:
     """Choose what she wears today → (outfit_id, reason). Same inputs, same answer."""
     rng = _rng(seed, day)
-    live = (weather or {}).get("temp_c")
-    temp = float(live) if live is not None else float(_SEASONAL_TEMP_C[day.month - 1])
-    condition = (weather or {}).get("condition")
+    fallback = float(_SEASONAL_TEMP_C[day.month - 1])
+    live = weather.get("temp_c") if isinstance(weather, dict) else None
+    try:
+        temp = fallback if live is None or isinstance(live, bool) else float(live)
+    except (TypeError, ValueError):
+        temp = fallback
+    raw_condition = weather.get("condition") if isinstance(weather, dict) else None
+    condition = raw_condition if isinstance(raw_condition, str) else None
     best: tuple[float, str, str] | None = None
     for oid in sorted(cat):
         o = cat[oid]

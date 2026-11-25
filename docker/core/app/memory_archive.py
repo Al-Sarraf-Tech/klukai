@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
+import asyncio
 import logging
 import os
 import re
@@ -222,17 +223,11 @@ async def save_image(
     img_path = IMAGES_DIR / filename
     thumb_path = IMAGES_DIR / thumb_filename
     try:
-        # Keep the lossless PNG as an archive, but serve a full-resolution WebP:
-        # a ~1MB PNG opens slowly through the tunnel, while WebP q95 at the same
-        # dimensions is visually identical and ~8x smaller, so it opens fast.
-        png_path.write_bytes(image_bytes)
-        from io import BytesIO
-
-        with Image.open(BytesIO(image_bytes)) as _full:
-            _full.convert("RGB").save(img_path, "WEBP", quality=95, method=6)
-
-        # Generate thumbnail (320px wide)
-        _generate_thumbnail(img_path, thumb_path, width=320)
+        # Pillow and the disk writes block. Her POV and a chat picture share
+        # this loop, so the encode runs on a worker thread.
+        await asyncio.to_thread(
+            _write_image_files, image_bytes, png_path, img_path, thumb_path
+        )
 
         # Extract curation data
         kept = True
@@ -309,6 +304,18 @@ async def save_image(
         # orphaned on the volume forever.
         _discard_files(png_path, img_path, thumb_path)
         return None
+
+
+def _write_image_files(
+    image_bytes: bytes, png_path: Path, img_path: Path, thumb_path: Path
+) -> None:
+    """Encode the archive files. Runs off the event loop: Pillow blocks chat."""
+    from io import BytesIO
+
+    png_path.write_bytes(image_bytes)
+    with Image.open(BytesIO(image_bytes)) as full:
+        full.convert("RGB").save(img_path, "WEBP", quality=95, method=6)
+    _generate_thumbnail(img_path, thumb_path, width=320)
 
 
 def _discard_files(*paths: Path) -> None:

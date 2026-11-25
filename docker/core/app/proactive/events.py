@@ -225,22 +225,11 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
         ):
             return
 
-        # Intimate/vulnerable moods BOOST events instead of blocking them
-        # — these are the moments Klukai would naturally say something
-        intimate_mood = self._last_mood in (
-            "tender",
-            "longing",
-            "flustered",
-            "affectionate",
-            "shy",
-            "yearning",
-            "devoted",
-            "vulnerable",
-            "drowsy",
-            "cozy",
-            "wistful",
-            "lonely",
-        )
+        # Same gate as morning, promises, and recall: mute, goodbye, quiet
+        # hours, the shared daily cap, and an unanswered line. A tender or
+        # lonely mood does not raise the odds. That was a second, louder gate.
+        if not self._can_send(now=now):
+            return
 
         # Guard: check mute
         if self._muted_until and now < self._muted_until:
@@ -259,10 +248,8 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
         if self._game_active_probe is not None and await self._game_active_probe():
             return
 
-        # Roll probability: 35% base, 60% during intimate moods, 50% during missions
+        # Roll probability: 35% base, 50% during a mission. Mood does not raise it.
         base_chance = 0.35
-        if intimate_mood:
-            base_chance = 0.60
         if self.mission_active:
             base_chance = max(base_chance, 0.50)
         if random.random() > base_chance:
@@ -286,6 +273,7 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
         # Deliver
         if self._on_message_callback:
             self._random_events_today += 1
+            self._proactive_count_today += 1
             self._last_random_event = now
             self._last_proactive_answered = False
             await self._on_message_callback(message)
@@ -296,8 +284,7 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
 
         Conditions:
         - affection >= 3
-        - not muted
-        - last proactive was answered
+        - the shared send gate (mute, goodbye, quiet hours, cap, unanswered)
         - user messaged today
         - not already delivered tonight
         - if mood is stressed/negative, deliver comfort instead
@@ -308,22 +295,20 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
             return
         if not self._user_messaged_today:
             return
-        if self._muted_until and now_local() < self._muted_until:
-            return
-        if not self._last_proactive_answered:
+        now = now_local()
+        if not self._can_send(now=now):
             return
 
         # Random delay 0-30 minutes
         delay = random.uniform(0, 30 * 60)
         await asyncio.sleep(delay)
 
-        # Re-check conditions after delay
+        # Re-check after the delay on this method's clock, not a second one.
+        now = now_local()
         if self._romance_delivered_today:
             return
-        if self._muted_until and now_local() < self._muted_until:
+        if not self._can_send(now=now):
             return
-        if self._goodbye_hold_active(now_local()):
-            return  # he signed off during the delay (or before it)
 
         self._romance_delivered_today = True
 
@@ -464,12 +449,13 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
         personality.yaml. Fires once per matching occurrence — guarded by a
         per-event delivered key in ``_seasonal_delivered`` (cleared at the daily
         reset), so it sends a single greeting on the day and never repeats it.
-        Respects mute + the per-event ``min_affection`` gate. In-character,
-        affection-aware templates; no LLM call.
+        Respects the shared send gate and the per-event ``min_affection``
+        gate. In-character, affection-aware templates; no LLM call.
         """
-        if self._muted_until and now_local() < self._muted_until:
-            return
         if not self._on_message_callback:
+            return
+        now = now_local()
+        if not self._can_send(now=now):
             return
 
         try:
@@ -483,7 +469,6 @@ class EventsMixin(AlbumEventsMixin, DreamEventsMixin):
         if not isinstance(events, dict) or not events:
             return
 
-        now = now_local()
         for key, cfg in events.items():
             if not isinstance(cfg, dict):
                 continue

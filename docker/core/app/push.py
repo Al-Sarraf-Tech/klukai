@@ -53,12 +53,25 @@ async def init_subscriptions() -> None:
                 "SELECT user_id, subscription FROM companion_push_subscriptions"
             )
             rows = await cur.fetchall()
+            # An in-flight move already owns this endpoint. A snapshot taken
+            # before that write must not put it back on the previous account.
+            held = {
+                s.get("endpoint")
+                for subs in _subscriptions.values()
+                for s in subs
+                if s.get("endpoint")
+            }
             for row in rows:
                 uid = row[0]
                 sub = row[1] if isinstance(row[1], dict) else json.loads(row[1])
+                endpoint = sub.get("endpoint")
+                if endpoint and endpoint in held:
+                    continue
                 if uid not in _subscriptions:
                     _subscriptions[uid] = []
                 _subscriptions[uid].append(sub)
+                if endpoint:
+                    held.add(endpoint)
             _initialized = True
             total = sum(len(v) for v in _subscriptions.values())
             if total:
@@ -74,13 +87,10 @@ async def add_subscription(user_id: str, sub: dict[str, Any]) -> None:
     if not endpoint:
         return
 
-    # Memory
-    if user_id not in _subscriptions:
-        _subscriptions[user_id] = []
-    for existing in _subscriptions[user_id]:
-        if existing.get("endpoint") == endpoint:
-            return
-    _subscriptions[user_id].append(sub)
+    # The same endpoint must not stay on the previous account.
+    for uid, subs in list(_subscriptions.items()):
+        _subscriptions[uid] = [s for s in subs if s.get("endpoint") != endpoint]
+    _subscriptions.setdefault(user_id, []).append(sub)
 
     # DB
     try:
@@ -89,7 +99,8 @@ async def add_subscription(user_id: str, sub: dict[str, Any]) -> None:
         async with get_conn_autocommit() as conn:
             await conn.execute(
                 "INSERT INTO companion_push_subscriptions (user_id, endpoint, subscription) "
-                "VALUES (%s, %s, %s) ON CONFLICT (endpoint) DO UPDATE SET subscription = EXCLUDED.subscription",
+                "VALUES (%s, %s, %s) ON CONFLICT (endpoint) DO UPDATE SET "
+                "user_id = EXCLUDED.user_id, subscription = EXCLUDED.subscription",
                 (user_id, endpoint, json.dumps(sub)),
             )
     except Exception as e:

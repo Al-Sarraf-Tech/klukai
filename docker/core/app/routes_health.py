@@ -10,6 +10,9 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+# A probe that never returns would leave the last "ok" on screen. Bound it.
+_PROBE_TIMEOUT_SECONDS = 2.0
+
 
 def register_health_routes(
     app: FastAPI,
@@ -78,10 +81,11 @@ def register_health_routes(
         try:
             from .db import check_health as db_health
 
-            db = await db_health()
+            db = await asyncio.wait_for(db_health(), timeout=_PROBE_TIMEOUT_SECONDS)
+            # Spread first so a non-ok probe cannot overwrite status.
             results["database"] = {
-                "status": "ok" if db.get("status") == "ok" else "down",
                 **db,
+                "status": "ok" if db.get("status") == "ok" else "down",
             }
         except Exception:
             results["database"] = {"status": "down"}
@@ -92,12 +96,26 @@ def register_health_routes(
             import redis.asyncio as aioredis
 
             _redis_factory: Callable[..., aioredis.Redis] = aioredis.from_url
-            r = _redis_factory(REDIS_URL, decode_responses=True)
-            ping_result = r.ping()
-            if isawaitable(ping_result):
-                await ping_result
-            await r.aclose()
-            results["redis"] = {"status": "ok"}
+            r = _redis_factory(
+                REDIS_URL,
+                decode_responses=True,
+                socket_timeout=_PROBE_TIMEOUT_SECONDS,
+                socket_connect_timeout=_PROBE_TIMEOUT_SECONDS,
+            )
+            try:
+                ping_result = r.ping()
+                if isawaitable(ping_result):
+                    ping_result = await asyncio.wait_for(
+                        ping_result, timeout=_PROBE_TIMEOUT_SECONDS
+                    )
+                if not ping_result:
+                    raise RuntimeError("redis ping failed")
+                results["redis"] = {"status": "ok"}
+            finally:
+                try:
+                    await r.aclose()
+                except Exception:
+                    pass
         except Exception:
             results["redis"] = {"status": "down"}
 

@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from collections.abc import Sequence
 from typing import Any, TypeVar
 
@@ -47,6 +48,17 @@ PROMPT_BUDGET_CHARS = 20_000
 _TERM = re.compile(r"[^\W_]+")
 _SPACE = re.compile(r"\s+")
 _ID = re.compile(r"[0-9]{1,4}")
+# A stored summary must not carry the model's scratch pad back into the next prompt.
+_THINK_BLOCK = re.compile(
+    r"(?is)<think\b[^>]*>.*?</think>|<\|think\|>.*?<\|/think\|>"
+)
+_THINK_OPEN = re.compile(r"(?is)<think\b[^>]*>.*|<\|think\|?>.*")
+# Credential shapes only. A memory may say "password" without being one.
+_SECRET = re.compile(
+    r"(?i)\b(?:sk-[A-Za-z0-9_\-]{8,}|xai-[A-Za-z0-9_\-]{8,}|ghp_[A-Za-z0-9]{8,})\b"
+    r"|\bBearer\s+[A-Za-z0-9._\-+/=]{8,}"
+    r"|\b(?:api[_-]?key|access[_-]?token|secret[_-]?key)\s*[:=]\s*\S+"
+)
 
 
 def search_terms(query: str) -> str:
@@ -87,9 +99,22 @@ async def fetch_candidates(
         return list(await cursor.fetchall())
 
 
+def sanitize(text: str) -> str:
+    """Drop chain-of-thought and credential shapes before a memory is shown.
+
+    The surrounding words stay. An empty result means there was nothing left
+    to recall, so the caller must not treat it as a memory.
+    """
+    if not isinstance(text, str) or not text:
+        return ""
+    cleaned = _THINK_BLOCK.sub(" ", text)
+    cleaned = _THINK_OPEN.sub(" ", cleaned)
+    return _SECRET.sub("[redacted]", cleaned)
+
+
 def clip(text: str, limit: int) -> str:
-    """One line of at most ``limit`` characters."""
-    flat = _SPACE.sub(" ", text).strip()
+    """One line of at most ``limit`` characters, without thought or secrets."""
+    flat = _SPACE.sub(" ", sanitize(text)).strip()
     return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
 
 
@@ -163,37 +188,114 @@ def _candidate_index(raw: object, count: int) -> int | None:
     return number - 1 if 1 <= number <= count else None
 
 
-# Texts a finished Grok pick stored for the next chat turn. The reply that
-# is already on its way never waits for this.
+# Next turn's pick. Redis (mirror_pin) keeps it across a restart; this dict is
+# the fallback when Redis is down. The reply already on its way does not wait.
 _PINNED: dict[str, list[str]] = {}
 _PENDING_PINS: dict[str, object] = {}
+_PIN_GEN: dict[str, str] = {}
+_TOKEN_GEN: dict[int, str] = {}
+_LAST_PIN_GEN = 0
+
+
+def _next_pin_gen() -> str:
+    """Fixed-width wall-clock id, strictly increasing in this process.
+
+    A restart's clock is still ahead of a pin written minutes ago, so a new
+    write replaces the old Redis value without reading it first.
+    """
+    global _LAST_PIN_GEN
+    now = time.time_ns()
+    if now <= _LAST_PIN_GEN:
+        now = _LAST_PIN_GEN + 1
+    _LAST_PIN_GEN = now
+    return f"{now:020d}"
+
+
+def _pin_texts(texts: Sequence[str]) -> list[str]:
+    cleaned = [text.strip() for text in texts if isinstance(text, str) and text.strip()]
+    return cleaned[:8]
 
 
 def begin_pin(user_id: str) -> object:
     """Drop the previous pick and give this user's newest job ownership."""
     token = object()
+    generation = _next_pin_gen()
     _PINNED.pop(user_id, None)
+    _PIN_GEN[user_id] = generation
+    _TOKEN_GEN[id(token)] = generation
     _PENDING_PINS[user_id] = token
     return token
 
 
+def pin_generation(token: object) -> str:
+    return _TOKEN_GEN[id(token)]
+
+
+def owns_pin(user_id: str, token: object) -> bool:
+    return _PENDING_PINS.get(user_id) is token
+
+
 def finish_pin(user_id: str, token: object, texts: Sequence[str]) -> None:
     """Publish only while this job is still the newest, then release it."""
+    _TOKEN_GEN.pop(id(token), None)
     if _PENDING_PINS.get(user_id) is token:
         del _PENDING_PINS[user_id]
         store_pinned(user_id, texts)
 
 
 def store_pinned(user_id: str, texts: Sequence[str]) -> None:
-    cleaned = [text.strip() for text in texts if isinstance(text, str) and text.strip()]
+    cleaned = _pin_texts(texts)
     if cleaned:
-        _PINNED[user_id] = cleaned[:8]
+        _PINNED[user_id] = cleaned
     else:
         _PINNED.pop(user_id, None)
 
 
 def take_pinned(user_id: str) -> list[str]:
     return _PINNED.pop(user_id, [])
+
+
+async def mirror_pin(user_id: str, generation: str, texts: Sequence[str]) -> None:
+    """Best-effort Redis copy of this generation. Never raises."""
+    from . import caches
+
+    try:
+        await caches.put_recall_pin(user_id, generation, _pin_texts(texts))
+    except Exception as exc:
+        logger.debug("recall pin mirror skipped (%s)", type(exc).__name__)
+
+
+async def _drop_mirrored_pin(user_id: str, generation: str) -> None:
+    from . import caches
+
+    try:
+        await caches.drop_recall_pin(user_id, generation)
+    except Exception as exc:
+        logger.debug("recall pin drop skipped (%s)", type(exc).__name__)
+
+
+async def consume_pinned(user_id: str) -> list[str]:
+    """The next-turn pin, once. Process memory wins; Redis covers a restart.
+
+    A job that has already cleared the process pin is not revived from Redis.
+    Redis trouble returns the process pin, or nothing after a restart.
+    """
+    if user_id in _PENDING_PINS:
+        return []
+    generation = _PIN_GEN.get(user_id, "")
+    if user_id in _PINNED:
+        texts = take_pinned(user_id)
+        if generation:
+            await _drop_mirrored_pin(user_id, generation)
+        return texts
+    try:
+        from . import caches
+
+        remote = await caches.take_recall_pin(user_id)
+    except Exception as exc:
+        logger.debug("recall pin read skipped (%s)", type(exc).__name__)
+        return []
+    return list(remote) if remote else []
 
 
 async def select(

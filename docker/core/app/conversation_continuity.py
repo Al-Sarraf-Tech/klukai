@@ -46,7 +46,25 @@ def _clip(text: str) -> str:
     flat = " ".join(text.split())
     if len(flat) <= CONTINUITY_CHARS:
         return flat
-    return flat[: CONTINUITY_CHARS - 1].rstrip() + "…"
+    # The close of a long line is where a choice or a promise usually sits.
+    # Keeping only the opening left a resolved decision looking unanswered.
+    mark = "…"
+    tail_len = min(160, CONTINUITY_CHARS // 3)
+    sep = " "
+    head_len = CONTINUITY_CHARS - tail_len - len(sep) - len(mark)
+    if head_len < 40:
+        return flat[: CONTINUITY_CHARS - 1].rstrip() + mark
+    head = flat[:head_len].rstrip()
+    tail = flat[-tail_len:].lstrip()
+    clipped = f"{head}{sep}{tail}{mark}"
+    if len(clipped) <= CONTINUITY_CHARS:
+        return clipped
+    overflow = len(clipped) - CONTINUITY_CHARS
+    head = head[:-overflow].rstrip() if overflow < len(head) else ""
+    clipped = f"{head}{sep}{tail}{mark}" if head else tail + mark
+    if len(clipped) <= CONTINUITY_CHARS:
+        return clipped
+    return clipped[: CONTINUITY_CHARS - 1].rstrip() + mark
 
 
 def stitch_continuity(

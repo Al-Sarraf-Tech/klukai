@@ -21,15 +21,20 @@
   var el = null;
   var unlocked = false;
   var queue = [];
-  var current = null; // the line playing now: {url, resolve}
+  var current = null; // the line playing now: {url, resolve, token}
+  var playToken = 0;
 
   function element() {
     if (!el) {
       el = new Audio();
       el.preload = 'auto';
       el.setAttribute('playsinline', '');
-      el.addEventListener('ended', function () { finish(true); });
-      el.addEventListener('error', function () { finish(false); });
+      // Only the clip that armed this token may finish. A synchronous
+      // ended/error from the previous src (fired while the next clip is
+      // assigned) used to resolve the new clip, so one bubble's playback
+      // attached to the next message.
+      el.addEventListener('ended', function () { finish(true, true); });
+      el.addEventListener('error', function () { finish(false, true); });
     }
     return el;
   }
@@ -59,28 +64,59 @@
     }
   }
 
-  function finish(ok) {
+  function finish(ok, fromMedia) {
     var item = current;
+    var a = el;
+    if (!item || !a || item.token !== a._playToken) return;
+    // Media events from the previous src can arrive after this clip is armed.
+    // They do not count until play() has accepted this url.
+    if (fromMedia && !item.live) return;
     current = null;
-    if (item) item.resolve(ok);
+    item.resolve(ok);
     var nextItem = queue.shift();
     if (nextItem) start(nextItem);
   }
 
   function start(item) {
+    var token = ++playToken;
+    item.token = token;
+    item.live = false;
     current = item;
     var a = element();
+    // Disarm across the src swap so a synchronous ended/error cannot resolve
+    // this clip. A queued event still sees live === false and is ignored.
+    a._playToken = 0;
     a.src = item.url;
+    a._playToken = token;
+    var p;
+    try { p = a.play(); } catch (e) { p = Promise.reject(e); }
+    Promise.resolve(p).then(function () {
+      if (current === item && item.token === a._playToken) item.live = true;
+    }, function () {
+      if (current === item && item.token === a._playToken) finish(false);
+    });
+  }
+
+  // iOS pauses the element in the background and never fires 'ended'. The
+  // current clip would then block every later bubble until reload.
+  function resumePaused() {
+    if (typeof document !== 'undefined' && document.hidden) return;
+    var item = current;
+    var a = el;
+    if (!item || !a || item.token !== a._playToken) return;
+    if (!a.paused || a.ended) return;
     var p;
     try { p = a.play(); } catch (e) { p = Promise.reject(e); }
     Promise.resolve(p).then(null, function () {
-      if (current === item) finish(false); // refused (no gesture yet) or undecodable
+      if (current === item && item.token === a._playToken) finish(false);
     });
   }
 
   GESTURES.forEach(function (t) {
     window.addEventListener(t, unlock, { capture: true, passive: true });
   });
+  document.addEventListener('visibilitychange', resumePaused);
+  window.addEventListener('pageshow', resumePaused);
 
   window.klukaiVoice = {
     /** Queue a line; resolves true when it has finished playing, false if the
@@ -90,6 +126,7 @@
       return new Promise(function (resolve) {
         queue.push({ url: url, resolve: resolve });
         if (!current) start(queue.shift());
+        else resumePaused(); // a paused earlier clip must not pin this one
       });
     },
     isUnlocked: function () { return unlocked; },

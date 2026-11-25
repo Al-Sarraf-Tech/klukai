@@ -12,10 +12,12 @@ settles its real usage after the reply; a spent cap uses the CLI instead.
 
 Either request needs a positive ``KLUKAI_EXTRACTION_DAILY_LIMIT``. Each one
 first reserves one attempt in the persistent creative ledger (kind
-``extraction``: one UTC-day cap shared by every background call), and a reserved
-attempt stays spent after failures and timeouts. This module raises only
-credential- and content-free errors; callers fall back to safe defaults and
-never surface them to the chat turn.
+``extraction``: one UTC-day cap shared by every background call). A failure,
+timeout, empty reply, or malformed JSON releases that attempt. Dollars for a
+request that was sent stay settled; this is not a refund. A caller may try
+once more only after that release, so the retry does not hold a second
+attempt. This module raises only credential- and content-free errors; callers
+fall back to safe defaults and never surface them to the chat turn.
 """
 
 from __future__ import annotations
@@ -33,7 +35,12 @@ from typing import Any
 
 import httpx
 
-from .creative_budget import CreativeBudgetError, record_usage, reserve_attempt
+from .creative_budget import (
+    CreativeBudgetError,
+    record_usage,
+    release_attempt,
+    reserve_attempt,
+)
 from .dependencies import http_stream
 from .shared_http import client as http_client, close as close_http_client
 
@@ -49,6 +56,11 @@ MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 # guards chat ("anthropic"), or the other way round.
 CLAUDE_BREAKER = "anthropic_extraction"
 _HAIKU_ID = re.compile(r"claude-haiku-[a-z0-9]+(?:-[a-z0-9]+)*")
+# Callers that demand a JSON object say so. Prose routes must not match.
+_JSON_REQUEST = re.compile(
+    r"return only valid json|write json only|only a json object|only this json",
+    re.IGNORECASE,
+)
 
 # Thinking counts against max_tokens; the JSON itself is a few hundred tokens.
 EXTRACTION_MAX_TOKENS = 4096
@@ -246,6 +258,18 @@ def _visible_text(data: object) -> tuple[str, str, dict[str, Any]]:
     return text, data["model"], usage
 
 
+def _wants_json(prompt: str) -> bool:
+    return _JSON_REQUEST.search(prompt) is not None
+
+
+def _usable_json_object(text: str) -> bool:
+    """True when the reply is a non-empty JSON object, fences and prose allowed."""
+    from .llm_json import parse_json
+
+    value = parse_json(text)
+    return isinstance(value, dict) and bool(value)
+
+
 async def complete_claude(
     prompt: str,
     *,
@@ -311,11 +335,17 @@ async def complete_claude(
         if isinstance(found, dict):
             charge = anthropic_usd(found)
         text, used_model, usage = _visible_text(data)
+        # Not a usable reply. The handler settles dollars for the sent request
+        # and releases only the attempt, so one fallback can reserve that slot.
+        if _wants_json(prompt) and not _usable_json_object(text):
+            raise ExtractionLLMError("Malformed JSON reply")
     except ExtractionLLMError:
         try_settle(hold, "anthropic", charge)
+        await release_attempt(attempt_id)
         raise
     except (httpx.HTTPError, TimeoutError, ValueError, TypeError, KeyError) as error:
         try_settle(hold, "anthropic", charge)
+        await release_attempt(attempt_id)
         status = (
             error.response.status_code
             if isinstance(error, httpx.HTTPStatusError)
@@ -404,11 +434,16 @@ async def complete(
         if len(turn.text.encode()) > _MAX_RESPONSE_BYTES:
             raise ExtractionLLMError("Grok reply exceeds size limit")
         text = turn.text
+        if _wants_json(prompt) and not _usable_json_object(text):
+            raise ExtractionLLMError("Malformed JSON reply")
     except ExtractionLLMError:
+        await release_attempt(attempt_id)
         raise
     except GrokChatCancelled:
+        await release_attempt(attempt_id)
         raise ExtractionCancelled("cancelled") from None
     except (GrokChatError, TimeoutError, ValueError, TypeError) as error:
+        await release_attempt(attempt_id)
         raise ExtractionLLMError(
             f"Grok request failed ({type(error).__name__})"
         ) from None

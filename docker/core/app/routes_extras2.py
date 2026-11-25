@@ -1,6 +1,7 @@
 """Split route handlers — group 2 from app/routes.py (S+ Phase 2 §6.1)."""
 
 from __future__ import annotations
+from collections.abc import Sequence
 from typing import Any
 
 
@@ -18,6 +19,30 @@ from .api_schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _predecessor_hash(record: object, anchor_id: object) -> tuple[bool, str | None]:
+    """(answered, hash) of the row immediately before the anchor.
+
+    None means the anchor is the first row. A value that is not a row — a
+    double that ignores the SQL — is not genesis and is not a predecessor.
+    """
+    if record is None:
+        return True, None
+    if (
+        isinstance(record, (str, bytes))
+        or not isinstance(record, Sequence)
+        or len(record) < 8
+        or isinstance(record[0], bool)
+        or not isinstance(record[0], int)
+        or not isinstance(anchor_id, int)
+        or record[0] >= anchor_id
+    ):
+        return False, None
+    prev = record[7]
+    if prev is not None and not isinstance(prev, str):
+        return False, None
+    return True, prev
 
 
 async def _get_user_id(request: Request) -> str | None:
@@ -259,11 +284,12 @@ def register_extras2(app: FastAPI) -> None:
     async def api_audit_verify_chain(request: Request, limit: int = 500) -> Any:
         """Verify the HMAC hash chain over the MOST RECENT N audit rows.
 
-        Admin-only. Fetches the newest N rows plus one extra anchor row
-        (whose stored chain_hash seeds the verification) and replays the
-        chain forward. Returns {valid, break_at_id, checked}. A break means
-        a row was modified, deleted, or left without a chain hash since
-        insert. For a full-chain audit, raise `limit` to cover the table.
+        Admin-only. Fetches the newest N rows plus one older anchor row.
+        That anchor is checked against the row before it (or as the first
+        row when nothing is older); only then does its hash seed the
+        window. A tampered anchor is a break, not a trust seed. Returns
+        {valid, break_at_id, checked}. For a full-chain audit, raise
+        `limit` to cover the table.
         """
         from . import error_codes as ec
 
@@ -275,8 +301,9 @@ def register_extras2(app: FastAPI) -> None:
         limit = max(1, min(limit, 5000))
         try:
             pool = get_pool()
+            predecessor = None
             async with pool.connection() as conn:
-                # Newest first; +1 row to use as the chain trust anchor.
+                # Newest first; +1 row is the anchor the window chains from.
                 rows_raw = await (
                     await conn.execute(
                         "SELECT id, event_type, user_id, ip_address, request_id, "
@@ -285,6 +312,16 @@ def register_extras2(app: FastAPI) -> None:
                         (limit + 1,),
                     )
                 ).fetchall()
+                if len(rows_raw) > limit:
+                    predecessor = await (
+                        await conn.execute(
+                            "SELECT id, event_type, user_id, ip_address, request_id, "
+                            "metadata, created_at, chain_hash "
+                            "FROM companion_audit_log WHERE id < %s "
+                            "ORDER BY id DESC LIMIT 1",
+                            (rows_raw[-1][0],),
+                        )
+                    ).fetchone()
             rows = [
                 {
                     "id": r[0],
@@ -300,10 +337,21 @@ def register_extras2(app: FastAPI) -> None:
             ]
             anchor_prev: str | None = None
             if len(rows) > limit:
-                # Oldest fetched row is the anchor: its stored hash seeds
-                # the chain; the row itself is verified by a wider run.
-                anchor_prev = rows[0]["chain_hash"]
+                anchor = rows[0]
                 rows = rows[1:]
+                answered, prev_hash = _predecessor_hash(predecessor, anchor["id"])
+                from . import audit_chain
+
+                if answered:
+                    # The old window used this row only as a hash seed, so a
+                    # tampered anchor still made the newer rows look valid.
+                    anchor_result = audit_chain.verify_chain(
+                        [anchor], prev_hash=prev_hash
+                    )
+                    if not anchor_result["valid"]:
+                        return anchor_result
+                stored = anchor.get("chain_hash")
+                anchor_prev = stored if isinstance(stored, str) else None
             from . import audit_chain
 
             return audit_chain.verify_chain(rows, prev_hash=anchor_prev)

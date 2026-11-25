@@ -50,6 +50,7 @@ from .wardrobe_catalog import (
     _CONDITION_REASONS as _CONDITION_REASONS,
     _mmdd_matches as _mmdd_matches,
     occasions_on as occasions_on,
+    spanning_occasions as spanning_occasions,
     _rng as _rng,
     _weather_ok as _weather_ok,
     pick_daily_outfit as pick_daily_outfit,
@@ -148,7 +149,13 @@ def granted_request_for(user_id: str, oid: str | None) -> bool:
 def _row_from_db(day: date, r: tuple[Any, ...]) -> HerDayRow:
     weather = r[4]
     if isinstance(weather, str):
-        weather = json.loads(weather)
+        try:
+            weather = json.loads(weather)
+        except (json.JSONDecodeError, ValueError):
+            weather = None
+    # A bad weather blob must not discard the outfit row (and the turn).
+    if not isinstance(weather, dict):
+        weather = None
     return HerDayRow(day, r[0], r[1], r[2], int(r[3] or 0), weather)
 
 
@@ -251,7 +258,7 @@ async def _quick_weather() -> dict[str, Any] | None:
 
     try:
         return await asyncio.wait_for(fetch_weather(), _WEATHER_TIMEOUT_S)
-    except (TimeoutError, asyncio.TimeoutError):
+    except Exception:
         return None
 
 
@@ -384,7 +391,7 @@ async def occasions_for(user_id: str, day: date) -> frozenset[str]:
     from .rituals import get_birthday
 
     bday = await get_birthday(user_id)
-    return occasions_on(day, None, bday) | occasions_on(now_local().date(), None, bday)
+    return spanning_occasions(day, now_local().date(), None, bday)
 
 
 async def handle_request(

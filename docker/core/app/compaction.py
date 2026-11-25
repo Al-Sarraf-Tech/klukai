@@ -34,11 +34,29 @@ def select_messages_for_compaction(
     return (list(messages[:-keep_recent]), list(messages[-keep_recent:]))
 
 
+def _summary_excerpt(content: str, limit: int) -> str:
+    """Keep the opening and, when it differs, the close.
+
+    A promise or the point of a long turn is usually the last sentence.
+    Cutting only the opening dropped it from the summary.
+    """
+    if limit <= 0:
+        return ""
+    if len(content) <= limit:
+        return content
+    head = content[:limit]
+    ending = content[-limit:]
+    if ending == head:
+        return head
+    return f"{head} … {ending}"
+
+
 def format_for_summary(messages: list[dict[str, Any]], limit_per_msg: int = 200) -> str:
     """Render messages as a compact LLM-friendly transcript."""
     lines = []
     for m in messages:
         role = m.get("role") or "?"
-        content = (m.get("content") or "")[:limit_per_msg]
-        lines.append(f"{role}: {content}")
+        raw = m.get("content") or ""
+        content = raw if isinstance(raw, str) else str(raw)
+        lines.append(f"{role}: {_summary_excerpt(content, limit_per_msg)}")
     return "\n".join(lines)

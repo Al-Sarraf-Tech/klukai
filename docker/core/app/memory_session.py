@@ -22,6 +22,32 @@ class SessionUnavailable(RuntimeError):
     """Session persistence is unavailable; access must not borrow other state."""
 
 
+def replaces_newer_summary(current: SessionState, incoming: SessionState) -> bool:
+    """True when ``incoming`` would put an older summary back.
+
+    A newer admission always wins. At the same revision, a snapshot that
+    still holds the turns a later compaction already folded away must not
+    write its old summary over the new one. Compaction itself shortens the
+    turn list, and a same-length summary edit is left for the caller.
+    """
+    if current.conversation_id != incoming.conversation_id:
+        return False
+    if incoming.revision > current.revision:
+        return False
+    if current.revision > incoming.revision:
+        return True
+    if (
+        not current.context_summary
+        or current.context_summary == incoming.context_summary
+        or not current.turns
+    ):
+        return False
+    return (
+        len(incoming.turns) > len(current.turns)
+        and incoming.turns[-len(current.turns) :] == current.turns
+    )
+
+
 class RedisSessionMixin:
     _redis: redis.Redis | None
     _session_locks: dict[str, tuple[asyncio.Lock, int]]
@@ -115,6 +141,14 @@ class RedisSessionMixin:
         state.last_activity = datetime.now()
         if self._redis is None:
             raise SessionUnavailable("Session persistence not initialized")
+        current: SessionState | None = None
+        try:
+            current = await self.get_session(session_id)
+        except SessionUnavailable:
+            current = None
+        if current is not None and replaces_newer_summary(current, state):
+            logger.info("Skipped a session write that would restore an older summary")
+            return
         saved = await self._redis_op(
             self._redis.set,
             f"companion:session:{session_id}",

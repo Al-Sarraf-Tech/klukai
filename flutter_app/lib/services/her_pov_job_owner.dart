@@ -1,3 +1,12 @@
+/// A terminal job status wins over a stale in-progress phase. A failure that
+/// only flipped status used to leave the screen drawing with the button stuck.
+String herPovPhaseName(Map<String, dynamic> data) {
+  final status = data['status'] as String?;
+  final phase = data['phase'] as String?;
+  if (status == 'failed' || status == 'done') return status!;
+  return phase ?? status ?? 'searching';
+}
+
 /// Admission and response ownership for one screen's accepted image job.
 ///
 /// This owns no UI state, transport, server work, or retry policy. A generation

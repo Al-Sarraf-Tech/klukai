@@ -474,6 +474,7 @@ class TestCostumeSetSuccess:
                 new=AsyncMock(return_value=_mk_aff_state(level=9)),
             ),
             patch("app.routes_extras.memory.store_fact", store_fact),
+            patch("app.wardrobe.set_requested", new=AsyncMock()),
             patch("app.audit.log", audit_log),
         ):
             result = await handler(CostumeRequest(costume="speed_star"), _mk_request())
@@ -504,6 +505,7 @@ class TestCostumeSetSuccess:
                 new=AsyncMock(return_value=_mk_aff_state(level=9)),
             ),
             patch("app.routes_extras.memory.store_fact", new=AsyncMock()),
+            patch("app.wardrobe.set_requested", new=AsyncMock()),
             patch("app.audit.log", new=AsyncMock(side_effect=RuntimeError("boom"))),
         ):
             result = await handler(
@@ -633,6 +635,7 @@ class TestCostumeUnlockGate:
                 new=AsyncMock(return_value=_mk_aff_state(level=6)),
             ),
             patch("app.routes_extras.memory.store_fact", store_fact),
+            patch("app.wardrobe.set_requested", new=AsyncMock()),
             patch("app.audit.log", audit_log),
         ):
             # Legacy id midnight_sovereign maps to formal_commission (unlock 6).

@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Collection, Coroutine
 from dataclasses import dataclass, field
-from typing import Any
 import logging
+import re
+from typing import Any
 
 from .extraction_llm import ExtractionCancelled
 from .helpers import is_trivial_message
@@ -27,6 +28,31 @@ EXTRACTION_MAX_TRIES = 3
 # Waiting turns per user. When a long chat outruns extraction, the oldest
 # waiting turn is dropped (and logged) rather than holding every snapshot.
 EXTRACTION_MAX_PENDING = 12
+
+# "keep that in mind" is a reminder. It contains the save phrase and is not one.
+_IN_MIND = re.compile(r"\s+in\s+mind\b")
+# "don't forget that" and "never keep that" contain the phrase and are not commands.
+_NEGATED = re.compile(
+    r"(?:^|[\s(])(?:don['\u2019]t|dont|do not|never"
+    r"|won['\u2019]t|wont|can['\u2019]t|cannot)\s+$"
+)
+
+
+def _phrase_hit(text: str, keywords: Collection[str]) -> bool:
+    """True when a save or discard phrase is a command, not an idiom around it."""
+    for keyword in keywords:
+        start = 0
+        while True:
+            found = text.find(keyword, start)
+            if found < 0:
+                break
+            start = found + len(keyword)
+            if keyword in {"keep that", "keep this"} and _IN_MIND.match(text[start:]):
+                continue
+            if _NEGATED.search(text[:found]):
+                continue
+            return True
+    return False
 
 
 @dataclass
@@ -119,14 +145,19 @@ class ChatFollowups:
         # them — otherwise a stale task can wake after the user reconnects and
         # clobber the fresh session's write. The turn's extraction is the
         # exception (below): its session write is revision-guarded.
-        if any(kw in content_lower for kw in self.save_keywords) and user_last_mem:
-            self.ws.track_task(
-                user_id, asyncio.create_task(self.keep_memory(user_last_mem, kept=True))
-            )
-        elif any(kw in content_lower for kw in self.discard_keywords) and user_last_mem:
+        if _phrase_hit(content_lower, self.save_keywords) and user_last_mem:
             self.ws.track_task(
                 user_id,
-                asyncio.create_task(self.keep_memory(user_last_mem, kept=False)),
+                asyncio.create_task(
+                    self.keep_memory(user_last_mem, kept=True, user_id=user_id)
+                ),
+            )
+        elif _phrase_hit(content_lower, self.discard_keywords) and user_last_mem:
+            self.ws.track_task(
+                user_id,
+                asyncio.create_task(
+                    self.keep_memory(user_last_mem, kept=False, user_id=user_id)
+                ),
             )
 
         # Track whether image gen was triggered (for extraction curation pass)

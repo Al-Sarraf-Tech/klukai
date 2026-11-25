@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 
 import redis.asyncio as aioredis
@@ -118,6 +119,24 @@ return 1
 """
 
 
+async def _arm_expiring_window(
+    r: aioredis.Redis, key: str, window_seconds: int
+) -> tuple[int, int]:
+    """Give a TTL-less counter one window, or delete it so it cannot stick."""
+    try:
+        async with get_breaker("redis").protect():
+            await r.expire(key, window_seconds)
+        return window_seconds, int(time.time()) + window_seconds
+    except Exception as exc:
+        logger.warning("Rate limit key could not be armed: %s", type(exc).__name__)
+    try:
+        async with get_breaker("redis").protect():
+            await r.delete(key)
+    except Exception as exc:
+        logger.warning("TTL-less rate limit key could not be cleared: %s", type(exc).__name__)
+    return window_seconds, 0
+
+
 async def check_and_consume(user_id: str, bucket: str) -> tuple[int, int]:
     """Check the limit for (user_id, bucket). Consume one token.
 
@@ -155,9 +174,12 @@ async def consume(user_id: str, bucket: str) -> tuple[int, int, Consumption | No
                 pipe.expiretime(key)
                 count, _armed, ttl, expires_at = await pipe.execute()
         count, ttl, expires_at = int(count), int(ttl), int(expires_at)
-        receipt = Consumption(key, expires_at) if expires_at > 0 else None
         if ttl < 0:
-            ttl = limit.window_seconds
+            # NX left no TTL. Arm one window, or delete, so the counter cannot stick.
+            ttl, expires_at = await _arm_expiring_window(
+                r, key, limit.window_seconds
+            )
+        receipt = Consumption(key, expires_at) if expires_at > 0 else None
         if count > limit.requests:
             raise RateLimitExceeded(bucket=bucket, retry_after=max(ttl, 1))
         return (limit.requests - count, max(ttl, 0), receipt)

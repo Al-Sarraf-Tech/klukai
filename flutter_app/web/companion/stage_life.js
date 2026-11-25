@@ -72,3 +72,17 @@ export function portraitStatusNotice(status, { hasFrames = false } = {}) {
   if (status === "unavailable") return "She's off-camera for now.";
   return "";
 }
+
+/** Slow re-poll while the GPU host is away. Pending frames stay on the fast cadence. */
+export const PORTRAIT_UNAVAILABLE_RETRY_MS = 180000;
+
+/**
+ * When to fetch the portrait again. `null` means the set is settled (ready,
+ * missing, or unknown): an `unavailable` host must still be polled or the
+ * fallback portrait stays up for the whole session.
+ */
+export function portraitRetryMs(status, { pollMs = 15000, unavailableMs = PORTRAIT_UNAVAILABLE_RETRY_MS } = {}) {
+  if (status === "pending" || status === "partial") return pollMs;
+  if (status === "unavailable") return unavailableMs;
+  return null;
+}

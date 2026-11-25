@@ -283,8 +283,11 @@ class AgentLoop:
             )
 
         if not result.response:
+            # Same opening as the other non-answers so the chat turn does not
+            # store this line, mine it, or replay it as something she said.
             result.response = (
-                "Intelligence gathered, Commander, but synthesis failed. "
+                "Communications disrupted, Commander. "
+                "Intelligence gathered, but synthesis failed. "
                 "I'll brief you with what I have on the next pass."
             )
 

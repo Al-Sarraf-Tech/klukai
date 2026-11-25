@@ -166,6 +166,13 @@ export function createVoice({
   async function playBuffer(arrayBuffer, run) {
     const audio = await context.decodeAudioData(arrayBuffer);
     if (!isActive(run)) return;
+    // A source started while the context is suspended never fires onended, so
+    // this drain would stay busy and every later line would queue in silence.
+    if (context.state === "suspended") {
+      try { await context.resume(); } catch { /* reported below */ }
+    }
+    if (!isActive(run)) return;
+    if (context.state === "suspended") throw new Error("AudioContext suspended");
     await new Promise((resolve, reject) => {
       const src = context.createBufferSource();
       let finished = false;

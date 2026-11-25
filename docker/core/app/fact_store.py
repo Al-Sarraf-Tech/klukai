@@ -109,6 +109,51 @@ async def insert_if_absent(key: str, value: str) -> bool:
         return await cur.fetchone() is not None
 
 
+async def replace_live(key: str, value: str) -> bool:
+    """Replace the text of one live fact. False if that key is not live.
+
+    Does not insert, so a missing or retired key stays missing. The previous
+    wording is overwritten and is no longer what recall returns. Chat
+    transcripts are not in this table and are not touched.
+    """
+    key = key.strip()
+    if not key:
+        raise ValueError("key must not be empty")
+    if not isinstance(value, str):
+        raise ValueError("value must be text")
+    await _ensure_table()
+    async with get_conn_autocommit() as conn:
+        cur = await conn.execute(
+            "UPDATE memory SET value=%s, ts=NOW(), expires_at=NULL "
+            "WHERE key=%s AND (expires_at IS NULL OR expires_at > NOW()) "
+            "RETURNING key",
+            (value, key),
+        )
+        return await cur.fetchone() is not None
+
+
+async def retire(key: str) -> bool:
+    """Hide one live fact from recall. False if that key is not live.
+
+    The row stays, with the old wording cleared and an expiry in the past, so
+    recall and pattern recall skip it. This is not a delete of conversation
+    rows; those live in another table and this statement names only ``memory``.
+    """
+    key = key.strip()
+    if not key:
+        raise ValueError("key must not be empty")
+    await _ensure_table()
+    async with get_conn_autocommit() as conn:
+        cur = await conn.execute(
+            "UPDATE memory SET value='', "
+            "expires_at=NOW() - make_interval(secs => 1), ts=NOW() "
+            "WHERE key=%s AND (expires_at IS NULL OR expires_at > NOW()) "
+            "RETURNING key",
+            (key,),
+        )
+        return await cur.fetchone() is not None
+
+
 # Expired TTL rows go only after this grace period, a batch at a time.
 PURGE_MARGIN_SECONDS = 86400
 PURGE_BATCH = 500

@@ -21,6 +21,7 @@ import urllib.request
 import agy_art_runtime as agy
 from agy_image_render import normalize
 from fal_image_render import brief
+from grok_image_check import background_only_passes
 from grok_image_render import _refuse_unsupported, aspect_ratio
 
 logger = logging.getLogger(__name__)
@@ -253,7 +254,7 @@ def _check(candidate: bytes, value: dict, spend, timeout: float, billed=None) ->
     end = text.rfind("}")
     if start < 0 or end <= start:
         raise ValueError("verdict")
-    verdict = validate_verdict(json.loads(text[start : end + 1]))
+    verdict = background_only_passes(validate_verdict(json.loads(text[start : end + 1])))
     verdict["seconds"] = 0.0
     return verdict, exact if exact is not None else spend.CHECK_USD
 

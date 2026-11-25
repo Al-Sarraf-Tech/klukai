@@ -25,11 +25,12 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import avatar_models, context, portrait
 from . import error_codes as ec
+from .portrait_assets import FRAME_CACHE_S
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_AVATAR_MODEL_PATH = "/avatar/klukai.glb"
-FRAME_CACHE = "private, max-age=1800"
+FRAME_CACHE = f"private, max-age={FRAME_CACHE_S}"
 # The model is personal-use, game-derived content behind the bearer token.
 # `private`: only his browser may keep it, never Cloudflare or any shared
 # cache. `no-cache`: the browser revalidates on every load, so each load

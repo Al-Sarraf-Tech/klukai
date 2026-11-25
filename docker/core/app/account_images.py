@@ -378,6 +378,9 @@ async def _submit_saved(row: dict[str, Any]) -> dict[str, Any]:
             ),
             "archive_metadata": _archive_metadata(row),
         }
+    # Completed with no bytes is an empty result, not a hard failure. The
+    # journal phase stays "failed" so nothing is marked generated.
+    empty = status == "completed" and not submitted.get("image")
     if status not in {"refused", "failed", "pending", "unknown", "unavailable", "busy"}:
         status = "failed"
     await update_request(request_id, phase=status, failure=status)
@@ -389,7 +392,10 @@ async def _submit_saved(row: dict[str, Any]) -> dict[str, Any]:
             row["user_id"],
             status,
         )
-    return _result(request_id, phase=status)
+    result = _result(request_id, phase=status)
+    if empty:
+        result["empty"] = True
+    return result
 
 
 async def complete_archive(
@@ -452,6 +458,7 @@ async def _recover_saved(row: dict[str, Any]) -> dict[str, Any]:
             "archive_metadata": _archive_metadata(row),
         }
     status = recovered.get("status")
+    empty = status == "completed" and not recovered.get("image")
     if status not in {
         "pending",
         "unknown",
@@ -464,7 +471,10 @@ async def _recover_saved(row: dict[str, Any]) -> dict[str, Any]:
     # Recovery is an observation, not submission ownership. In particular a
     # stale /recover miss must not erase a concurrent definitive busy rejection.
     # Keep the journal unchanged until bytes can be archived.
-    return _result(request_id, phase=status)
+    result = _result(request_id, phase=status)
+    if empty:
+        result["empty"] = True
+    return result
 
 
 # ── Background renders yield to his own pictures ─────────────────────────────

@@ -108,7 +108,7 @@ class WSManager:
         return ws in self._connections.get(user_id, ())
 
     async def validate_connection(
-        self, user_id: str, ws: WebSocket, *, refresh: bool = False
+        self, user_id: str, ws: WebSocket, *, refresh: bool = False, close: bool = True
     ) -> bool:
         """Fail closed on expired, revoked, deactivated or unavailable auth."""
         if not self.has_connection(user_id, ws):
@@ -128,18 +128,54 @@ class WSManager:
         except Exception:
             owner = None
         if owner != user_id:
-            await self.disconnect(
-                user_id, ws, close=True, code=4001, reason="Invalid or expired token"
-            )
+            if close:
+                await self.disconnect(
+                    user_id, ws, close=True, code=4001, reason="Invalid or expired token"
+                )
             return False
         # Password reset / disconnect can retire membership during the lookup.
         return self.has_connection(user_id, ws)
+
+    async def _session_is_foreign(self, user_id: str, ws: WebSocket) -> bool:
+        """True when this socket's live session belongs to another user."""
+        session_hash = self._session_hashes.get(ws)
+        if session_hash is None:
+            return False
+        from .auth import get_user_from_session_hash
+
+        try:
+            owner = await asyncio.wait_for(
+                get_user_from_session_hash(session_hash),
+                SESSION_CHECK_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            # Unknown owner is not "still this user". Do not deliver the frame.
+            return True
+        return owner is not None and owner != user_id
 
     async def revoke_user(self, user_id: str) -> None:
         """Retire all devices before waiting on transport or task cleanup."""
         await self.disconnect(
             user_id, close=True, code=4001, reason="Invalid or expired token"
         )
+
+    async def revoke_session(self, user_id: str, session_hash: str) -> None:
+        """Close devices signed in with this session. Other devices stay."""
+        if not session_hash:
+            return
+        matched = [
+            socket
+            for socket in tuple(self._connections.get(user_id, ()))
+            if self._session_hashes.get(socket) == session_hash
+        ]
+        for socket in matched:
+            await self.disconnect(
+                user_id,
+                socket,
+                close=True,
+                code=4001,
+                reason="Signed out",
+            )
 
     async def connect(
         self,
@@ -284,7 +320,27 @@ class WSManager:
         if not conns:
             return
         for socket in tuple(conns):
-            if not await self.validate_connection(user_id, socket):
+            if socket not in self._connections.get(user_id, ()):
+                continue
+            # close=False: write an error before retiring the socket.
+            # A live session for a different user is not given the frame.
+            if not await self.validate_connection(user_id, socket, close=False):
+                if (
+                    data.get("type") == "error"
+                    and socket in self._connections.get(user_id, ())
+                    and not await self._session_is_foreign(user_id, socket)
+                ):
+                    await self._send_one(socket, data)
+                if socket in self._connections.get(user_id, ()):
+                    await self.disconnect(
+                        user_id,
+                        socket,
+                        close=True,
+                        code=4001,
+                        reason="Invalid or expired token",
+                    )
+                continue
+            if socket not in self._connections.get(user_id, ()):
                 continue
             if not await self._send_one(socket, data):
                 await self.disconnect(user_id, socket, close=True)

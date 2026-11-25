@@ -458,7 +458,7 @@ def wants_recall(message: str) -> bool:
 # she is supposed to already know, even when the question is short.
 _SHORT_MEMORY_CUE = re.compile(
     r"\b(?:remember|memories|memory|birthday|birthdays|promise|promised|"
-    r"anniversary|nickname)\b|my name|who am i",
+    r"anniversary|nickname|forgot|forget|forgets|forgotten)\b|my name|who am i",
     re.IGNORECASE,
 )
 
@@ -467,8 +467,8 @@ def asks_to_be_remembered(message: str) -> bool:
     """True when this turn should load memories, facts and past exchanges.
 
     Album phrases in ``wants_recall`` count, and so do short personal
-    questions ("my birthday?", "what's my name", "remember?") that would
-    otherwise fall under the twenty-character skip.
+    questions ("my birthday?", "what's my name", "remember?", "you forgot",
+    "don't forget") that would otherwise fall under the twenty-character skip.
     """
     if wants_recall(message):
         return True

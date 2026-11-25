@@ -1,7 +1,7 @@
 """Persistent, fail-closed attempt quotas for explicitly enabled cloud jobs.
 
-An attempt is spent before dispatch and is never refunded. This bounds retries
-and unknown outcomes across workers/restarts; it is not a dollar billing cap.
+An attempt is spent before dispatch. ``release_attempt`` gives the counter
+back only when the caller got no usable reply. It is not a dollar refund.
 The ledger belongs on the shared persistent images volume, outside served files.
 """
 
@@ -121,6 +121,39 @@ def _reserve(kind: str) -> str:
 async def reserve_attempt(kind: str) -> str:
     """Consume one UTC daily/monthly attempt atomically before network I/O."""
     return await asyncio.to_thread(_reserve, kind)
+
+
+def _release(attempt_id: str) -> bool:
+    """Delete one reserved row. Missing rows and storage errors release nothing."""
+    if not isinstance(attempt_id, str) or not attempt_id.strip():
+        return False
+    path = _ledger_path()
+    if not path.is_file():
+        return False
+    conn = None
+    try:
+        conn = sqlite3.connect(path, timeout=5.0, isolation_level=None)
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            "DELETE FROM creative_attempts WHERE id = ?", (attempt_id,)
+        )
+        removed = cursor.rowcount > 0
+        conn.execute("COMMIT")
+        return removed
+    except (OSError, sqlite3.Error):
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+async def release_attempt(attempt_id: str) -> bool:
+    """Return one attempt to the counter. Does not refund dollars or usage."""
+    try:
+        return await asyncio.to_thread(_release, attempt_id)
+    except (OSError, sqlite3.Error, CreativeBudgetError):
+        logger.warning("Creative attempt release unavailable")
+        return False
 
 
 _USAGE_FIELDS = frozenset(

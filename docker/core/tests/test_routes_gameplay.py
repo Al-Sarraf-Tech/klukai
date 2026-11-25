@@ -332,6 +332,7 @@ class TestCostumeSetRoute:
                 "app.routes_extras.affection.get_state",
                 new=AsyncMock(return_value=SimpleNamespace(level=9)),
             ),
+            patch("app.wardrobe.set_requested", new=AsyncMock()),
         ):
             result = await handler(
                 CostumeRequest(costume="astral_luminous"), _mk_request()
@@ -376,6 +377,7 @@ class TestCostumeSetRoute:
                 "app.routes_extras.affection.get_state",
                 new=AsyncMock(return_value=SimpleNamespace(level=0)),
             ),
+            patch("app.wardrobe.set_requested", new=AsyncMock()),
         ):
             result = await handler(
                 CostumeRequest(costume="blazing_star"), _mk_request()

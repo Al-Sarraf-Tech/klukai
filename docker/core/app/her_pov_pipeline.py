@@ -16,6 +16,25 @@ logger = logging.getLogger(__name__)
 
 # The Her POV screen shows a job's message as written, so the error stays in the log.
 _INTERNAL_FAILURE_LINE = "…Something went wrong on my side. Ask me again."
+_TERMINAL = frozenset({"done", "failed"})
+
+
+def _cancellation_depth() -> int:
+    """Drop a pending cancel so a terminal status write can finish."""
+    task = asyncio.current_task()
+    depth = 0
+    if task is not None:
+        while task.uncancel():
+            depth += 1
+    return depth
+
+
+def _restore_cancellation(depth: int) -> None:
+    task = asyncio.current_task()
+    if task is None:
+        return
+    for _ in range(depth):
+        task.cancel()
 
 
 @dataclass
@@ -35,7 +54,21 @@ class HerPOVPipeline:
         from . import wardrobe as _wardrobe
 
         completed = False
+        wrote_terminal = False
+
+        async def _terminal(**fields: Any) -> None:
+            nonlocal wrote_terminal
+            await self.set_job(job_id, **fields)
+            wrote_terminal = True
+
         try:
+            from . import memory_her_pov
+
+            existing = await memory_her_pov.get_job(job_id)
+            if existing and existing.get("status") in _TERMINAL:
+                wrote_terminal = True
+                return
+
             await self.set_job(
                 job_id,
                 status="searching",
@@ -59,8 +92,7 @@ class HerPOVPipeline:
 
             exchange = await self.pick_exchange(user_id)
             if not exchange:
-                await self.set_job(
-                    job_id,
+                await _terminal(
                     status="failed",
                     phase="failed",
                     error="no_history",
@@ -173,8 +205,7 @@ class HerPOVPipeline:
                 include_commander=bool(pov["couple"]) and user_id == "jalsarraf",
             )
             if not img:
-                await self.set_job(
-                    job_id,
+                await _terminal(
                     status="failed",
                     phase="failed",
                     error="image_failed",
@@ -226,8 +257,7 @@ class HerPOVPipeline:
                 # annotation deduped against an earlier one) and deletes the files.
                 # Reporting "done" here left the client showing "Kept." over an
                 # empty stage with nothing in the archive.
-                await self.set_job(
-                    job_id,
+                await _terminal(
                     status="failed",
                     phase="failed",
                     error="not_saved",
@@ -251,8 +281,7 @@ class HerPOVPipeline:
                 return
 
             img_b64 = base64.b64encode(img).decode()
-            await self.set_job(
-                job_id,
+            await _terminal(
                 status="done",
                 phase="done",
                 message="Kept.",
@@ -266,8 +295,12 @@ class HerPOVPipeline:
             completed = True
 
             try:
+                # The journal line is for the Her POV screen (the done frame
+                # below). send_proactive persists by default, which would file
+                # it as a chat reply he did not ask for. The flag lives on
+                # WSManager, so this call has to opt out.
                 line = pov["annotation"]
-                await ws.send_proactive(user_id, line)
+                await ws.send_proactive(user_id, line, persist=False)
                 await asyncio.sleep(0.8)
                 await ws.send(
                     user_id,
@@ -305,20 +338,24 @@ class HerPOVPipeline:
             # WSManager.disconnect cancels tracked tasks when the last device drops,
             # and this pipeline runs for minutes. CancelledError is not an Exception
             # subclass, so without this the job would sit at "drawing" forever and
-            # the client would poll it for the life of the process.
+            # the client would poll it for the life of the process. A real cancel
+            # is still pending at the next await, so the status write has to run
+            # with that pending cancel cleared or it never lands.
             logger.info("her_pov cancelled user=%s job=%s", user_id, job_id)
-            await self.set_job(
-                job_id,
-                status="failed",
-                phase="failed",
-                error="cancelled",
-                message="…Interrupted. Ask me again when you're back.",
-            )
+            depth = _cancellation_depth()
+            try:
+                await _terminal(
+                    status="failed",
+                    phase="failed",
+                    error="cancelled",
+                    message="…Interrupted. Ask me again when you're back.",
+                )
+            finally:
+                _restore_cancellation(depth)
             raise
         except Exception as e:
             logger.exception("her_pov failed: %s", e)
-            await self.set_job(
-                job_id,
+            await _terminal(
                 status="failed",
                 phase="failed",
                 error="internal",
@@ -339,4 +376,22 @@ class HerPOVPipeline:
             except Exception:
                 pass
         finally:
-            await self.release_claim(user_id, job_id)
+            depth = _cancellation_depth()
+            try:
+                if not wrote_terminal and not completed:
+                    try:
+                        await _terminal(
+                            status="failed",
+                            phase="failed",
+                            error="internal",
+                            message=_INTERNAL_FAILURE_LINE,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "her_pov could not record failure user=%s job=%s",
+                            user_id,
+                            job_id,
+                        )
+                await self.release_claim(user_id, job_id)
+            finally:
+                _restore_cancellation(depth)

@@ -22,7 +22,6 @@ from .helpers import (
     client_ip,
     fix_narration as _fix_narration,
     strip_actions_for_tts as _strip_actions_for_tts,
-    tts_clip as _tts_clip,
 )
 from .image_gen import generate_image
 from .llm_router import FAILURE_SENTINEL
@@ -50,6 +49,38 @@ from .api_schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+# One Fish call stays at the voice client's chunk size. A longer line is
+# spoken in pieces; the tail is not clipped off.
+_TTS_LIMIT = 500
+_TTS_BOUNDARIES = (". ", "! ", "? ", ".\n", "!\n", "?\n")
+
+
+def _speech_pieces(text: str, limit: int = _TTS_LIMIT) -> list[str]:
+    """Split speech into pieces of at most ``limit`` characters.
+
+    Unlike ``tts_clip``, every piece is kept, in order. A sentence end
+    inside the window is preferred; otherwise the cut is hard and the
+    remainder is the next piece.
+    """
+    rest = text.strip()
+    pieces: list[str] = []
+    while rest:
+        if len(rest) <= limit:
+            pieces.append(rest)
+            break
+        window = rest[: limit + 1]
+        cut = max(window.rfind(boundary) for boundary in _TTS_BOUNDARIES)
+        if cut >= limit // 3:
+            piece = rest[: cut + 1].strip()
+            rest = rest[cut + 1 :].strip()
+        else:
+            piece = rest[:limit].strip()
+            rest = rest[limit:].strip()
+        if not piece:
+            break
+        pieces.append(piece)
+    return pieces
 
 
 # ── Module-level state ─────────────────────────────────────────────────────
@@ -175,10 +206,10 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                 {"error": "This voice reads English or Japanese text"},
                 status_code=400,
             )
-        tts_text, language = await _fish_speech(
-            user_id, tts_text if queued else _tts_clip(tts_text), req.language
-        )
         if queued:
+            # One queued job is one Fish call, capped at 500. The voice
+            # client already sends the rest as later chunks.
+            tts_text, language = await _fish_speech(user_id, tts_text, req.language)
             try:
                 job = app.state.voice_jobs.submit(
                     user_id, {"text": tts_text, "language": language}
@@ -192,25 +223,65 @@ def register_routes(app: FastAPI) -> None:  # noqa: C901  (route registration)
                     status_code=429,
                     headers={"Retry-After": "5"},
                 )
+        pieces = _speech_pieces(tts_text)
+        if not pieces:
+            return JSONResponse({"error": "No speakable text"}, status_code=400)
         try:
             from .voice_client import post_tts
 
-            # Bound the whole call, not just the HTTP leg the client covers.
-            r = await asyncio.wait_for(
-                post_tts(
-                    {"text": _tts_clip(tts_text), "language": language},
-                    timeout=60.0,
-                ),
-                timeout=45.0,
-            )
-            if r.status_code == 200:
-                import base64
+            audios: list[bytes] = []
+            for piece in pieces:
+                spoken, language = await _fish_speech(user_id, piece, req.language)
+                # A translation can run past the cap; speak that tail too.
+                for part in _speech_pieces(spoken):
+                    # Bound the whole call, not just the HTTP leg the client covers.
+                    r = await asyncio.wait_for(
+                        post_tts(
+                            {"text": part, "language": language},
+                            timeout=60.0,
+                        ),
+                        timeout=45.0,
+                    )
+                    if r.status_code != 200:
+                        # Never forward the upstream status: the stage's net.js
+                        # reads any 401 as HIS session expiring and logs him out.
+                        logger.error("TTS upstream HTTP %s", r.status_code)
+                        return JSONResponse({"error": "TTS failed"}, status_code=502)
+                    audios.append(r.content)
+            if not audios:
+                return JSONResponse({"error": "No speakable text"}, status_code=400)
+            import base64
+            import io
+            import wave
 
-                return {"audio": base64.b64encode(r.content).decode()}
-            # Never forward the upstream status: the stage's net.js reads any
-            # 401 as HIS session expiring and logs him out.
-            logger.error("TTS upstream HTTP %s", r.status_code)
-            return JSONResponse({"error": "TTS failed"}, status_code=502)
+            if len(audios) == 1:
+                audio = audios[0]
+            else:
+                frames: list[bytes] = []
+                params = None
+                for part in audios:
+                    with wave.open(io.BytesIO(part), "rb") as src:
+                        current = src.getparams()
+                        if params is None:
+                            params = current
+                        elif (
+                            current.nchannels,
+                            current.sampwidth,
+                            current.framerate,
+                        ) != (params.nchannels, params.sampwidth, params.framerate):
+                            raise ValueError("voice chunk format mismatch")
+                        frames.append(src.readframes(src.getnframes()))
+                if params is None:
+                    raise ValueError("voice chunk had no wav header")
+                out = io.BytesIO()
+                with wave.open(out, "wb") as dst:
+                    dst.setnchannels(params.nchannels)
+                    dst.setsampwidth(params.sampwidth)
+                    dst.setframerate(params.framerate)
+                    for frame in frames:
+                        dst.writeframes(frame)
+                audio = out.getvalue()
+            return {"audio": base64.b64encode(audio).decode()}
         except TimeoutError:
             logger.warning("TTS timed out waiting on the voice service")
             return JSONResponse({"error": "Voice service unavailable"}, status_code=503)

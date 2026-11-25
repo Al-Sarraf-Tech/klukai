@@ -119,31 +119,49 @@ def current_block(blocks: list[Block], hour: int) -> Block | None:
     return next((b for b in blocks if b.start <= hour < b.end), None)
 
 
+def _wearable(
+    oid: str | None,
+    level: int,
+    cat: dict[str, wardrobe.Outfit],
+    occasions: frozenset[str],
+) -> str | None:
+    """Unlocked, not denied, and not the wedding gown below the level that owns it.
+
+    The gown's ``open_at`` is the oath. Below that she wears it only on one of
+    its days (White Day, his birthday), the same gate as a request.
+    """
+    canon = wardrobe.canonical_id(oid, cat)
+    if not canon or not wardrobe.is_unlocked(canon, level, cat):
+        return None
+    outfit = cat[canon]
+    if outfit.deny:
+        return None
+    if outfit.category == "oath" and level < outfit.open_at:
+        if not occasions & (frozenset(outfit.occasions) | {"commander_birthday"}):
+            return None
+    return canon
+
+
 def effective_outfit(
     row: wardrobe.HerDayRow,
     block: Block | None,
     level: int,
     cat: dict[str, wardrobe.Outfit],
+    occasions: frozenset[str] = frozenset(),
 ) -> tuple[str, str]:
     """(outfit_id, source): his granted request > special-day pick > block kit > her pick."""
-    requested = wardrobe.canonical_id(row.requested_outfit_id, cat)
-    if requested and wardrobe.is_unlocked(requested, level, cat):
+    requested = _wearable(row.requested_outfit_id, level, cat, occasions)
+    if requested:
         return requested, "commander"
-    base = wardrobe.canonical_id(row.base_outfit_id, cat)
-    if base and not wardrobe.is_unlocked(base, level, cat):
-        base = None
+    base = _wearable(row.base_outfit_id, level, cat, occasions)
     special = base is not None and cat[base].category in _ROSTER_PROOF
     # Block kit for her private life shows only once he's allowed to see that
     # life (affection 3) — otherwise "Off duty" + "Hangar Coveralls" leaks it.
     visible = block is not None and (not block.private or level >= 3)
-    if (
-        not special
-        and visible
-        and block is not None
-        and block.outfit
-        and wardrobe.is_unlocked(block.outfit, level, cat)
-    ):
-        return str(block.outfit), "roster"
+    if not special and visible and block is not None and block.outfit:
+        kit = _wearable(block.outfit, level, cat, occasions)
+        if kit:
+            return kit, "roster"
     if base:
         return base, "auto"
     return wardrobe.DEFAULT_OUTFIT, "auto"
@@ -238,7 +256,22 @@ async def her_now(
         activity = mission or str(cfg.get("activity", ""))
         oid, source = wardrobe.DEFAULT_OUTFIT, "roster"
     else:
-        oid, source = effective_outfit(row, block, level, cat)
+        bday = None
+        try:
+            from .rituals import get_birthday
+
+            bday = await get_birthday(user_id)
+        except Exception:
+            bday = None
+        oid, source = effective_outfit(
+            row,
+            block,
+            level,
+            cat,
+            occasions=wardrobe.spanning_occasions(
+                row.day, now_local().date(), p, bday
+            ),
+        )
         if override == "gaming":
             cfg = overrides.get("gaming") or {}
             location, activity = (

@@ -79,6 +79,10 @@ class ContextRequest(BaseModel):
 
 def make_excerpt(content: str, match_start: int) -> str:
     """Slice original code points around the database-computed match offset."""
+    try:
+        match_start = int(match_start)
+    except (TypeError, ValueError):
+        match_start = 0
     start = max(0, match_start - 80)
     end = min(len(content), start + 400)
     return (
@@ -116,10 +120,15 @@ async def search_messages(user_id: str, request: SearchRequest) -> dict[str, Any
     )
     conditions = [
         sql.SQL("user_id = %s"),
+        # user_id on the message defaults to the operator; the conversation
+        # owner is the real boundary.
+        sql.SQL(
+            "conversation_id IN (SELECT id FROM companion_conversations WHERE user_id = %s)"
+        ),
         sql.SQL("role IN ('user', 'assistant')"),
         sql.SQL("content ILIKE %s ESCAPE E'\\\\'"),
     ]
-    params: list[Any] = [user_id, pattern]
+    params: list[Any] = [user_id, user_id, pattern]
     if request.speaker != "all":
         conditions.append(sql.SQL("role = %s"))
         params.append(request.speaker)
@@ -222,8 +231,9 @@ async def get_message_context(
         anchor = await (
             await conn.execute(
                 "SELECT id, role, content, created_at, conversation_id FROM companion_messages "
-                "WHERE user_id = %s AND id = %s AND role IN ('user', 'assistant')",
-                (user_id, request.anchor_id),
+                "WHERE user_id = %s AND id = %s AND role IN ('user', 'assistant') "
+                "AND conversation_id IN (SELECT id FROM companion_conversations WHERE user_id = %s)",
+                (user_id, request.anchor_id, user_id),
             )
         ).fetchone()
         if anchor is None:

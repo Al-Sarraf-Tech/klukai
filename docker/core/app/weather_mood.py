@@ -44,6 +44,20 @@ _CONDITION_PHRASE: dict[str, str] = {
 _DEFAULT_PHRASE = "Weather's shifting where you are — stay sharp out there, Commander."
 
 
+def _condition(weather: dict[str, Any] | None) -> str | None:
+    """Coarse condition, or None when the reading is missing or not a dict.
+
+    A failed fetch must not raise (that dropped the morning turn) and must
+    not look like a real condition (that replaced her mood with composed).
+    """
+    if not isinstance(weather, dict):
+        return None
+    condition = weather.get("condition", "")
+    if not isinstance(condition, str) or not condition.strip():
+        return None
+    return condition
+
+
 def weather_to_mood(weather: dict[str, Any] | None, affection_level: int) -> str | None:
     """Map current weather to a valid taxonomy mood.
 
@@ -55,10 +69,9 @@ def weather_to_mood(weather: dict[str, Any] | None, affection_level: int) -> str
         A mood string guaranteed to be a key of ``MOOD_SPECIFIC_BLEED``, or
         ``None`` when ``weather`` is None (caller keeps the current mood).
     """
-    if weather is None:
+    condition = _condition(weather)
+    if condition is None:
         return None
-
-    condition = weather.get("condition", "")
 
     # Clear skies warm with affection: the more her guard is down, the fonder
     # the sun makes her. All three values are valid taxonomy moods.
@@ -75,9 +88,9 @@ def weather_to_mood(weather: dict[str, Any] | None, affection_level: int) -> str
 def weather_phrase(weather: dict[str, Any] | None) -> str:
     """Return a short, single-sentence in-character line about the weather.
 
-    Returns ``""`` when ``weather`` is None.
+    Returns ``""`` when ``weather`` is None or has no condition.
     """
-    if weather is None:
+    condition = _condition(weather)
+    if condition is None:
         return ""
-    condition = weather.get("condition", "")
     return _CONDITION_PHRASE.get(condition, _DEFAULT_PHRASE)

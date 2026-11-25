@@ -228,12 +228,16 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
         if isinstance(exchanges, BaseException):
             logger.warning("recall_for_prompt: exchanges failed: %s", exchanges)
             exchanges = []
-        episode_texts = [ep["summary"] for ep in episodes]
-        pinned = [
+        episode_texts = [
             text
-            for text in memory_recall.take_pinned(user_id)
-            if text not in episode_texts
+            for text in (memory_recall.sanitize(ep["summary"]) for ep in episodes)
+            if text.strip()
         ]
+        pinned = []
+        for text in await memory_recall.consume_pinned(user_id):
+            clean = memory_recall.sanitize(text)
+            if clean.strip() and clean not in episode_texts:
+                pinned.append(clean)
         return pinned + episode_texts, facts, exchanges
 
     async def pin_next_recall(self, query: str, user_id: str = "jalsarraf") -> None:
@@ -244,35 +248,46 @@ class MemoryManager(MemoryFactsMixin, ExchangeMemoryMixin, RedisSessionMixin):
         does not cancel the extraction still running for the previous turn.
         A newer pick owns the slot: an older one cannot overwrite it, and an
         empty or failed pick does not leave the previous topic in place.
+        The texts are mirrored to Redis with a short TTL. Redis trouble keeps
+        the in-process pin and does not call the picker on the live turn.
         """
         token = memory_recall.begin_pin(user_id)
+        generation = memory_recall.pin_generation(token)
         texts: list[str] = []
         try:
-            rows = await memory_recall.fetch_candidates(
-                _EPISODES_RANKED_SQL, _EPISODES_RECENT_SQL, query, user_id
-            )
-            if not rows:
-                return
-            picked = await memory_recall.select(
-                "memory_recall_episodes",
-                "summaries of past conversations between the Commander and Klukai",
-                query,
-                [_episode_text(row) for row in rows],
-                5,
-                timeout=RECALL_PRECOMPUTE_TIMEOUT_S,
-                role="background",
-            )
-            if not picked:
-                return
-            chosen = memory_recall.ordered(rows, picked, 5)
-            texts = [row[1] or "" for row in chosen]
-        except Exception as exc:
-            logger.warning(
-                "Recall precompute failed (%s); next turn keeps Postgres order",
-                type(exc).__name__,
-            )
+            # Drop the previous mirror before the pick, so a crash mid-pick
+            # cannot serve the old topic after a restart.
+            await memory_recall.mirror_pin(user_id, generation, [])
+            try:
+                rows = await memory_recall.fetch_candidates(
+                    _EPISODES_RANKED_SQL, _EPISODES_RECENT_SQL, query, user_id
+                )
+                if not rows:
+                    return
+                picked = await memory_recall.select(
+                    "memory_recall_episodes",
+                    "summaries of past conversations between the Commander and Klukai",
+                    query,
+                    [_episode_text(row) for row in rows],
+                    5,
+                    timeout=RECALL_PRECOMPUTE_TIMEOUT_S,
+                    role="background",
+                )
+                if not picked:
+                    return
+                chosen = memory_recall.ordered(rows, picked, 5)
+                texts = [row[1] or "" for row in chosen]
+            except Exception as exc:
+                logger.warning(
+                    "Recall precompute failed (%s); next turn keeps Postgres order",
+                    type(exc).__name__,
+                )
         finally:
-            memory_recall.finish_pin(user_id, token, texts)
+            try:
+                if memory_recall.owns_pin(user_id, token):
+                    await memory_recall.mirror_pin(user_id, generation, texts)
+            finally:
+                memory_recall.finish_pin(user_id, token, texts)
 
     async def get_memory_nudge(
         self,

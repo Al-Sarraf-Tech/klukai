@@ -28,11 +28,18 @@ class AffectionChange(BaseModel):
 
 
 def compute_level(levels: list[dict[str, Any]], score: int) -> tuple[int, str]:
-    """Map score to level index and name."""
+    """Map score to the highest threshold it has reached, not the last row.
+
+    A later row with a lower threshold must not pull a level-up back down, or
+    one gain would skip the level the score actually crossed.
+    """
     result_level = 0
     result_name = "Cold Assessment"
+    best: int | None = None
     for lv in levels:
-        if score >= lv.get("threshold", 0):
+        threshold = lv.get("threshold", 0)
+        if score >= threshold and (best is None or threshold >= best):
+            best = threshold
             result_level = lv.get("index", 0)
             result_name = lv.get("name", "Unknown")
     return result_level, result_name

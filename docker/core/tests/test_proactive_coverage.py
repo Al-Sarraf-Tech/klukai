@@ -750,8 +750,8 @@ class TestRandomEvent:
         ],
     )
     async def test_quiet_hours_block_even_with_a_winning_roll(self, when):
-        """_random_event bypasses _can_send(), so it must check quiet hours
-        itself — a misfire replay at 23:15 must never wake him."""
+        """Quiet hours fail _can_send(), which _random_event now uses.
+        A misfire replay at 23:15 must never wake him."""
         e = _engine_for_random_event(affection=0)
         with (
             _patch_now(when),
@@ -802,9 +802,9 @@ class TestRandomEvent:
         )
 
     @pytest.mark.asyncio
-    async def test_intimate_mood_boosts_chance_above_base(self):
-        """At a tender mood, base_chance becomes 0.60 — a roll of 0.5 (which
-        would skip at the 0.35 base) now fires."""
+    async def test_intimate_mood_does_not_boost_chance_above_base(self):
+        """A tender mood used to lift the roll from 0.35 to 0.60. A roll of
+        0.5 stays under the base and does not fire."""
         e = _engine_for_random_event(affection=0, mood="tender")
         with (
             _patch_now(),
@@ -816,7 +816,8 @@ class TestRandomEvent:
             ),
         ):
             await e._random_event()
-        e._on_message_callback.assert_awaited_once()
+        e._on_message_callback.assert_not_awaited()
+        assert e._random_events_today == 0
 
     @pytest.mark.asyncio
     async def test_affection_gates_eligible_categories(self):
@@ -1127,7 +1128,7 @@ class TestRomanceEdgeGates:
         async def flip(*_a, **_k):
             e._romance_delivered_today = True
 
-        with patch("asyncio.sleep", side_effect=flip):
+        with _patch_now(), patch("asyncio.sleep", side_effect=flip):
             await e._romance_window()
         cb.assert_not_awaited()
 
@@ -1169,6 +1170,7 @@ class TestRomanceEdgeGates:
 
         gen = AsyncMock(return_value="The ridge... I keep thinking of it. And you.")
         with (
+            _patch_now(),
             patch("asyncio.sleep", new=AsyncMock()),
             patch("app.proactive.events.publish_event", new=AsyncMock()),
             patch("app.fact_extractor.generate_romance_message", gen),
@@ -1305,7 +1307,7 @@ class TestDreamEvent:
         # so patching the module attribute is robust regardless of import order
         # (replacing sys.modules wholesale breaks once the module is pre-imported).
         with (
-            _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
+            _patch_now(datetime(2026, 5, 17, 14, 37, 0)),
             patch(
                 "app.proactive.events.random.random", side_effect=lambda: next(rolls)
             ),
@@ -1417,7 +1419,7 @@ class TestDreamEvent:
         )
 
         with (
-            _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
+            _patch_now(datetime(2026, 5, 17, 14, 37, 0)),
             patch(
                 "app.proactive.events.random.random", side_effect=lambda: next(rolls)
             ),
@@ -1443,7 +1445,7 @@ class TestDreamEvent:
 
         rolls = iter([0.1, 0.1])
         with (
-            _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
+            _patch_now(datetime(2026, 5, 17, 14, 37, 0)),
             patch(
                 "app.proactive.events.random.random", side_effect=lambda: next(rolls)
             ),
@@ -1463,7 +1465,7 @@ class TestDreamEvent:
         e = _dream_engine(affection=8)
         rolls = iter([0.1, 0.1])
         with (
-            _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
+            _patch_now(datetime(2026, 5, 17, 14, 37, 0)),
             patch(
                 "app.proactive.events.random.random", side_effect=lambda: next(rolls)
             ),
@@ -1479,7 +1481,7 @@ class TestDreamEvent:
         e = _dream_engine(affection=8)
         rolls = iter([0.1, 0.1])
         with (
-            _patch_now(datetime(2026, 5, 17, 2, 37, 0)),
+            _patch_now(datetime(2026, 5, 17, 14, 37, 0)),
             patch(
                 "app.proactive.events.random.random", side_effect=lambda: next(rolls)
             ),

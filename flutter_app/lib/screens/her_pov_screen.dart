@@ -60,6 +60,16 @@ class HerPovScreen extends StatefulWidget {
 
 enum _Phase { idle, searching, thinking, drawing, done, failed }
 
+_Phase herPovPhase(Map<String, dynamic> data) {
+  return switch (herPovPhaseName(data)) {
+    'thinking' => _Phase.thinking,
+    'drawing' => _Phase.drawing,
+    'done' => _Phase.done,
+    'failed' => _Phase.failed,
+    _ => _Phase.searching,
+  };
+}
+
 class _HerPovScreenState extends State<HerPovScreen>
     with TickerProviderStateMixin {
   late final MemoryService _memories;
@@ -280,14 +290,7 @@ class _HerPovScreenState extends State<HerPovScreen>
         return;
       }
       _pollFailures = 0;
-      final phase = (data['phase'] as String?) ?? 'searching';
-      final mapped = switch (phase) {
-        'thinking' => _Phase.thinking,
-        'drawing' => _Phase.drawing,
-        'done' => _Phase.done,
-        'failed' => _Phase.failed,
-        _ => _Phase.searching,
-      };
+      final mapped = herPovPhase(data);
       setState(() {
         _phase = mapped;
         _status = (data['message'] as String?) ?? _status;

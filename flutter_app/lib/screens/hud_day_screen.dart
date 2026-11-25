@@ -8,8 +8,35 @@ import '../widgets/hud_parts.dart';
 /// Where a block of her day stands against now.
 enum BlockState { done, active, later }
 
+/// `2026-10-04` is a calendar day, not an instant. `DateTime.parse` reads a
+/// date-only string as UTC midnight, which is still the previous evening in
+/// Chicago, so the day screen showed yesterday.
+DateTime? calendarDate(String raw) {
+  final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})').firstMatch(raw.trim());
+  if (match == null) return null;
+  final year = int.tryParse(match[1]!);
+  final month = int.tryParse(match[2]!);
+  final day = int.tryParse(match[3]!);
+  if (year == null || month == null || day == null) return null;
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  final date = DateTime(year, month, day);
+  // Overflow (31 Feb) must not become another day.
+  if (date.year != year || date.month != month || date.day != day) return null;
+  return date;
+}
+
+/// Her day turns at 05:00 local, the same hour the server uses.
+String herDayId(DateTime now) {
+  final shifted = now.subtract(const Duration(hours: 5));
+  final y = shifted.year.toString().padLeft(4, '0');
+  final m = shifted.month.toString().padLeft(2, '0');
+  final d = shifted.day.toString().padLeft(2, '0');
+  return '$y-$m-$d';
+}
+
 /// Done, active and later for each block. The server marks the current
 /// block; without a mark (none fits the hour) the device clock decides.
+/// A mark the clock has already left does not stay active.
 List<BlockState> scheduleStates(List<ScheduleBlock> blocks, DateTime now) {
   final hhmm = now.hour * 100 + now.minute;
   // `end` is exclusive; a block ending at 0000 runs to midnight.
@@ -18,7 +45,14 @@ List<BlockState> scheduleStates(List<ScheduleBlock> blocks, DateTime now) {
     return end == null || end <= start ? 2400 : end;
   }
 
+  bool contains(ScheduleBlock b) {
+    final start = int.tryParse(b.start);
+    if (start == null) return false;
+    return start <= hhmm && hhmm < endOf(b, start);
+  }
+
   var current = blocks.indexWhere((b) => b.current);
+  if (current >= 0 && !contains(blocks[current])) current = -1;
   if (current < 0) {
     current = blocks.indexWhere((b) {
       final start = int.tryParse(b.start);
@@ -87,6 +121,10 @@ class _HudDayScreenState extends State<HudDayScreen> {
   HerDay? _day;
   bool _authBounced = false;
 
+  /// Already asked the server for this loaded-day → current-day pair, so a
+  /// date the server has not rolled yet cannot refetch forever.
+  String? _rolledFrom;
+
   DateTime get _now => (widget.now ?? DateTime.now)();
 
   @override
@@ -137,10 +175,21 @@ class _HudDayScreenState extends State<HudDayScreen> {
     }
   }
 
-  DateTime get _date => DateTime.tryParse(_day?.date ?? '') ?? _now;
+  DateTime get _date => calendarDate(_day?.date ?? '') ?? _now;
 
   @override
-  Widget build(BuildContext context) => HudBackground(
+  Widget build(BuildContext context) {
+    final loaded = _day;
+    if (loaded != null && _phase == _Phase.ready && loaded.date != herDayId(_now)) {
+      final token = '${loaded.date}>${herDayId(_now)}';
+      if (_rolledFrom != token) {
+        _rolledFrom = token;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _load();
+        });
+      }
+    }
+    return HudBackground(
     child: RefreshIndicator(
       color: HudColors.cyan,
       backgroundColor: HudColors.ground,
@@ -173,7 +222,8 @@ class _HudDayScreenState extends State<HudDayScreen> {
         ],
       ),
     ),
-  );
+    );
+  }
 
   List<Widget> _body(HerDay day) {
     final status = day.status;

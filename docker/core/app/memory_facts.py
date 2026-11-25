@@ -9,6 +9,89 @@ from .picture_denial import refusal_reference
 
 logger = logging.getLogger(__name__)
 
+# A relationship fact is one short line, not a transcript.
+MAX_FACT_TEXT = 1000
+
+
+class FactControlError(ValueError):
+    """correct/forget/list refused. ``code`` is not_found, invalid, or unavailable."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(code)
+
+
+def relationship_storage_key(user_id: str, fact_id: str) -> str | None:
+    """Full ``memory`` key for one of this user's ``rel:`` facts.
+
+    ``fact_id`` is the short id (``favorite_drink``, ``joke:tea``), never a
+    storage key and never another user's row. None means it is not his id.
+    """
+    if not isinstance(user_id, str) or not user_id or user_id != user_id.strip():
+        return None
+    if not isinstance(fact_id, str) or not fact_id or fact_id != fact_id.strip():
+        return None
+    if len(fact_id) > 80 or "\x00" in fact_id or ".." in fact_id:
+        return None
+    if any(ch in fact_id for ch in "/\\%?#"):
+        return None
+    if fact_id.startswith("companion:"):
+        return None
+    return f"companion:{user_id}:rel:{fact_id}"
+
+
+def retired_marker_key(user_id: str, fact_id: str) -> str | None:
+    """Permanent marker that blocks a forgotten ``rel:`` fact from being stored again.
+
+    It is not itself a ``rel:`` row, so list and dossier recall do not show it.
+    """
+    if relationship_storage_key(user_id, fact_id) is None:
+        return None
+    return f"companion:{user_id}:retired-rel:{fact_id}"
+
+
+def clean_fact_text(value: object) -> str | None:
+    """Corrected wording, or None if it is empty, too long, or not text.
+
+    Blank text is not a forget. Forget is a separate operation.
+    """
+    if not isinstance(value, str) or "\x00" in value:
+        return None
+    text = value.strip()
+    if not text or len(text) > MAX_FACT_TEXT:
+        return None
+    return text
+
+
+def relationship_facts_from_rows(
+    rows: list[dict[str, Any]], user_id: str
+) -> list[dict[str, str]]:
+    """His live ``rel:`` rows as ``{id, value, ts}``.
+
+    A key that does not belong to ``user_id``, or that is not a ``rel:`` fact,
+    is dropped. Order is the caller's order.
+    """
+    if not isinstance(user_id, str) or not user_id:
+        return []
+    out: list[dict[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        key = row.get("key")
+        if not isinstance(key, str):
+            continue
+        prefix = f"companion:{user_id}:rel:"
+        if not key.startswith(prefix):
+            continue
+        fact_id = key.removeprefix(prefix)
+        if relationship_storage_key(user_id, fact_id) != key:
+            continue
+        value = row.get("value")
+        if not isinstance(value, str) or not value:
+            continue
+        out.append({"id": fact_id, "value": value, "ts": str(row.get("ts", ""))})
+    return out
+
 
 class MemoryFactsMixin:
     # Facts live in Klukai's own database (app/fact_store.py). Every operation
@@ -16,10 +99,29 @@ class MemoryFactsMixin:
     # live chat read path, so a database hiccup degrades context, never the
     # reply.
 
+    async def _relationship_fact_retired(self, key: str, user_id: str) -> bool:
+        """True when ``key`` is a ``rel:`` fact he forgot.
+
+        A lookup failure stays open, matching ``store_fact``: the write itself
+        still fails open if the database is down. A present marker does not.
+        """
+        if not isinstance(key, str) or not key.startswith("rel:"):
+            return False
+        marker = retired_marker_key(user_id, key.removeprefix("rel:"))
+        if marker is None:
+            return False
+        try:
+            return await fact_store.recall(marker) is not None
+        except Exception as e:
+            logger.warning("retired-fact check failed for %s: %s", key, e)
+            return False
+
     async def store_fact(
         self, key: str, value: str, ttl: int | None = None, user_id: str = "jalsarraf"
     ) -> None:
         try:
+            if await self._relationship_fact_retired(key, user_id):
+                return
             await fact_store.store(f"companion:{user_id}:{key}", value, ttl)
         except Exception as e:
             logger.warning("store_fact failed for %s: %s", key, e)
@@ -39,11 +141,15 @@ class MemoryFactsMixin:
         # The caller's pattern may use LIKE wildcards; the user scope never
         # does, so a user id containing % or _ cannot reach another user's rows.
         scope = fact_store.escape_like(f"companion:{user_id}:")
+        prefix = f"companion:{user_id}:"
         try:
-            return await fact_store.recall_pattern(scope + pattern)
+            rows = await fact_store.recall_pattern(scope + pattern)
         except Exception as e:
             logger.warning("recall_facts_by_pattern failed (%s): %s", pattern, e)
             return []
+        # LIKE is not the authority: a pattern that still matches another
+        # user's key must not become one of his facts.
+        return [row for row in rows if str(row.get("key", "")).startswith(prefix)]
 
     # ── Relationship facts (convenience) ─────────────────────────────────
 
@@ -55,7 +161,10 @@ class MemoryFactsMixin:
         prefix = f"companion:{user_id}:rel:"
         out: dict[str, Any] = {}
         for e in entries:
-            short = e["key"].replace(prefix, "")
+            key = str(e.get("key", ""))
+            if not key.startswith(prefix):
+                continue
+            short = key.removeprefix(prefix)
             # Inside jokes live under rel:joke:* and surface via their own
             # per-message block — exclude them so the Commander dossier stays
             # clean and they aren't double-injected.
@@ -68,6 +177,75 @@ class MemoryFactsMixin:
         self, key: str, value: str, user_id: str = "jalsarraf"
     ) -> None:
         await self.store_fact(f"rel:{key}", value, user_id=user_id)
+
+    async def list_relationship_facts(
+        self, user_id: str = "jalsarraf"
+    ) -> list[dict[str, str]]:
+        """His ``rel:`` rows, including inside jokes. Not another user's.
+
+        Unlike dossier recall, a database error is raised. An empty list is
+        a real empty list, not a hidden outage.
+        """
+        if not isinstance(user_id, str) or not user_id:
+            raise FactControlError("not_found")
+        scope = fact_store.escape_like(f"companion:{user_id}:")
+        try:
+            rows = await fact_store.recall_pattern(scope + "rel:%")
+        except Exception:
+            logger.warning("relationship fact list unavailable")
+            raise FactControlError("unavailable") from None
+        return relationship_facts_from_rows(rows, user_id)
+
+    async def correct_relationship_fact(
+        self, fact_id: str, value: str, user_id: str = "jalsarraf"
+    ) -> dict[str, str]:
+        """Replace his fact's text. The old wording is what recall no longer returns.
+
+        A fact id that is not his live ``rel:`` row is not found. This does
+        not insert a row and does not read or write conversation messages.
+        """
+        key = relationship_storage_key(user_id, fact_id)
+        text = clean_fact_text(value)
+        if key is None:
+            raise FactControlError("not_found")
+        if text is None:
+            raise FactControlError("invalid")
+        try:
+            replaced = await fact_store.replace_live(key, text)
+        except Exception:
+            logger.warning("relationship fact correction unavailable")
+            raise FactControlError("unavailable") from None
+        if not replaced:
+            raise FactControlError("not_found")
+        return {"id": fact_id, "value": text}
+
+    async def forget_relationship_fact(
+        self, fact_id: str, user_id: str = "jalsarraf"
+    ) -> dict[str, Any]:
+        """Retire his fact from recall. Conversation rows are not deleted.
+
+        The marker stops a later ``rel:`` store from writing the old wording
+        back. An id that is not his live fact is not found, and no marker is
+        written for it.
+        """
+        key = relationship_storage_key(user_id, fact_id)
+        marker = retired_marker_key(user_id, fact_id)
+        if key is None or marker is None:
+            raise FactControlError("not_found")
+        try:
+            live = await fact_store.recall(key)
+            if not live:
+                raise FactControlError("not_found")
+            await fact_store.store(marker, "retired")
+            retired = await fact_store.retire(key)
+        except FactControlError:
+            raise
+        except Exception:
+            logger.warning("relationship fact forget unavailable")
+            raise FactControlError("unavailable") from None
+        if not retired:
+            raise FactControlError("unavailable")
+        return {"id": fact_id, "forgotten": True}
 
     # ── Inside jokes / running references ────────────────────────────────
     # Reuses the relationship-fact store (companion_relationship) under a
@@ -150,4 +328,9 @@ class MemoryFactsMixin:
         """Get all recorded relationship milestones for a user."""
         entries = await self.recall_facts_by_pattern("milestone:%", user_id=user_id)
         prefix = f"companion:{user_id}:milestone:"
-        return {e["key"].replace(prefix, ""): e["value"] for e in entries}
+        out: dict[str, str] = {}
+        for e in entries:
+            key = str(e.get("key", ""))
+            if key.startswith(prefix):
+                out[key.removeprefix(prefix)] = e["value"]
+        return out
