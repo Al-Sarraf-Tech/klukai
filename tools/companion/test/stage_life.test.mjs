@@ -67,7 +67,7 @@ test("the stage wires follow-tail, motion reset, and wake", () => {
   const app = readFileSync(new URL("../../../flutter_app/web/companion/app.js", import.meta.url), "utf8");
   const css = readFileSync(new URL("../../../flutter_app/web/companion/companion.css", import.meta.url), "utf8");
   const html = readFileSync(new URL("../../../flutter_app/web/companion.html", import.meta.url), "utf8");
-  assert.match(app, /from "\.\/stage_life\.js"/);
+  assert.match(app, /from "\.\/stage_life\.js(?:\?v=[0-9a-f]+)?"/);
   assert.match(app, /applySubtitle\(/);
   assert.match(app, /clearDecorativeMotion\(/);
   assert.match(app, /beginWake\(/);

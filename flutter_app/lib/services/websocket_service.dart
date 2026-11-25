@@ -242,7 +242,8 @@ String? turnText(Object? value) {
 }
 
 /// Whether a row is hers to read aloud. Error rows are the link reporting a
-/// failure, not her voice; speaking them spends a synthesis lease on an apology.
+/// failure, not her voice; speaking them spends a synthesis lease on an
+/// apology.
 bool lineIsSpeakable({
   required String id,
   required String content,

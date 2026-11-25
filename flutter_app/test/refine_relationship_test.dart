@@ -5,7 +5,9 @@ import 'package:companion_app/screens/hud_day_screen.dart';
 import 'package:companion_app/widgets/wardrobe_widgets.dart';
 
 void main() {
-  test('a date-only her-day is that calendar day, not the previous evening', () {
+  test(
+    'a date-only her-day is that calendar day, not the previous evening',
+    () {
     final date = calendarDate('2026-10-04');
     expect(date, isNotNull);
     expect(date!.year, 2026);

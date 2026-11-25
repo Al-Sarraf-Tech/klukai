@@ -180,7 +180,9 @@ class _HudDayScreenState extends State<HudDayScreen> {
   @override
   Widget build(BuildContext context) {
     final loaded = _day;
-    if (loaded != null && _phase == _Phase.ready && loaded.date != herDayId(_now)) {
+    if (loaded != null &&
+        _phase == _Phase.ready &&
+        loaded.date != herDayId(_now)) {
       final token = '${loaded.date}>${herDayId(_now)}';
       if (_rolledFrom != token) {
         _rolledFrom = token;
